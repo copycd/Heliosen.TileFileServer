@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Heliosen.TileFileServer</AssemblyName>
+    <RootNamespace>Heliosen.TileFileServer</RootNamespace>
+    <Version>1.2608.22</Version>
+
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+
+    <!-- 빌드는 RID 중립으로 두고, publish 할 때만 RID 를 지정한다. -->
+    <RuntimeIdentifiers>win-x64;linux-x64;linux-arm64</RuntimeIdentifiers>
+
+    <!-- 서버 워크로드. 처리량 차이가 크다. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+
+    <Authors>Heliosen.Copycd</Authors>
+    <Company>Heliosen</Company>
+    <Product>Heliosen.TileFileServer</Product>
+    <Description>RocksDB / filesystem tile server. Serves pre-built tile stores over HTTP like a static web server.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- win-x64, linux-x64, linux-arm64, osx 네이티브가 모두 들어있는 패키지다. -->
+    <PackageReference Include="RocksDB" Version="11.1.2.3412" />
+  </ItemGroup>
+
+</Project>
