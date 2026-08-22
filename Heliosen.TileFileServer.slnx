@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Heliosen.TileFileServer.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/SampleStore/SampleStore.csproj" />
+  </Folder>
+</Solution>
