@@ -23,6 +23,7 @@
     <Company>Heliosen</Company>
     <Product>Heliosen.TileFileServer</Product>
     <Description>RocksDB / filesystem tile server. Serves pre-built tile stores over HTTP like a static web server.</Description>
+    <Platforms>AnyCPU;x64</Platforms>
   </PropertyGroup>
 
   <ItemGroup>
