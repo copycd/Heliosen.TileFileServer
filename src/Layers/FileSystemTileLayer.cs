@@ -1,7 +1,7 @@
-using Heliosen.TileServer.Tiles;
+using Heliosen.TileFileServer.Tiles;
 using Microsoft.Net.Http.Headers;
 
-namespace Heliosen.TileServer.Layers;
+namespace Heliosen.TileFileServer.Layers;
 
 /// <summary>
 /// RocksDB 가 아닌 그냥 파일 폴더를 서비스한다. nginx 로 타일을 내보내던 방식 그대로다.

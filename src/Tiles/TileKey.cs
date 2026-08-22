@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace Heliosen.TileServer.Tiles;
+namespace Heliosen.TileFileServer.Tiles;
 
 /// <summary>
 /// 타일 키 인코딩. **DTB.RocksTileStore.RocksTileStore.EncodeTileKey 와 동일해야 한다.**

@@ -1,7 +1,7 @@
 using System.Collections.Frozen;
-using Heliosen.TileServer.Configuration;
+using Heliosen.TileFileServer.Configuration;
 
-namespace Heliosen.TileServer.Layers;
+namespace Heliosen.TileFileServer.Layers;
 
 /// <summary>
 /// 루트 폴더를 훑어서 레이어 목록을 만들고 유지한다.

@@ -1,6 +1,6 @@
-using Heliosen.TileServer.Tiles;
+using Heliosen.TileFileServer.Tiles;
 
-namespace Heliosen.TileServer.Layers;
+namespace Heliosen.TileFileServer.Layers;
 
 /// <summary>
 /// "이 좌표에 타일이 없다" 를 기억한다.

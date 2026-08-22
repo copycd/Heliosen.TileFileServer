@@ -20,23 +20,23 @@ done
 
 OUT="${OUT:-publish/$RID}"
 
-dotnet publish src/Heliosen.TileServer/Heliosen.TileServer.csproj \
+dotnet publish src/Heliosen.TileFileServer.csproj \
   -c Release \
   -r "$RID" \
   -o "$OUT" \
   --self-contained "$SELF_CONTAINED" \
   -p:PublishReadyToRun=true
 
-chmod +x "$OUT/Heliosen.TileServer"
+chmod +x "$OUT/Heliosen.TileFileServer"
 
 echo
 echo "완료: $OUT"
 echo
 echo "실행:"
-echo "  cd $OUT && ./Heliosen.TileServer"
+echo "  cd $OUT && ./Heliosen.TileFileServer"
 echo
 echo "타일 루트를 바꿔서 실행:"
-echo "  TileServer__Root=/srv/tiles ./Heliosen.TileServer"
+echo "  TileServer__Root=/srv/tiles ./Heliosen.TileFileServer"
 echo
 echo "systemd 로 등록:"
 echo "  sudo cp deploy/heliosen-tileserver.service /etc/systemd/system/"

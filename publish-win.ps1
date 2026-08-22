@@ -9,7 +9,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $args = @(
-    "publish", "src\Heliosen.TileServer\Heliosen.TileServer.csproj",
+    "publish", "src\Heliosen.TileFileServer.csproj",
     "-c", "Release",
     "-r", "win-x64",
     "-o", $Output,
@@ -27,12 +27,12 @@ Write-Host "완료: $Output"
 Write-Host ""
 Write-Host "실행:"
 Write-Host "  cd $Output"
-Write-Host "  .\Heliosen.TileServer.exe"
+Write-Host "  .\Heliosen.TileFileServer.exe"
 Write-Host ""
 Write-Host "타일 루트를 바꿔서 실행:"
-Write-Host "  `$env:TileServer__Root='D:\tiles'; .\Heliosen.TileServer.exe"
+Write-Host "  `$env:TileServer__Root='D:\tiles'; .\Heliosen.TileFileServer.exe"
 Write-Host ""
 Write-Host "윈도우 서비스로 등록 (관리자 권한 필요):"
-Write-Host "  sc.exe create HeliosenTileServer binPath= `"$(Resolve-Path $Output)\Heliosen.TileServer.exe`" start= auto"
+Write-Host "  sc.exe create HeliosenTileServer binPath= `"$(Resolve-Path $Output)\Heliosen.TileFileServer.exe`" start= auto"
 Write-Host "  참고: 콘솔 앱이라 서비스 제어 신호를 직접 처리하지 않는다."
 Write-Host "        정식 서비스로 쓰려면 NSSM 을 권장한다:  nssm install HeliosenTileServer ..."

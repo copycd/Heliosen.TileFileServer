@@ -1,7 +1,7 @@
-using Heliosen.TileServer.Configuration;
+using Heliosen.TileFileServer.Configuration;
 using RocksDbSharp;
 
-namespace Heliosen.TileServer.Layers;
+namespace Heliosen.TileFileServer.Layers;
 
 /// <summary>
 /// 열려있는 모든 RocksDB 가 공유하는 자원. 싱글턴으로 하나만 산다.

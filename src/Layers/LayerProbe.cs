@@ -1,4 +1,4 @@
-namespace Heliosen.TileServer.Layers;
+namespace Heliosen.TileFileServer.Layers;
 
 /// <summary>
 /// "이 폴더의 내용이 그대로인가" 를 싸게 판단하기 위한 지문.

@@ -1,4 +1,4 @@
-namespace Heliosen.TileServer.Tiles;
+namespace Heliosen.TileFileServer.Tiles;
 
 /// <summary>
 /// RocksDB 타일 키의 첫 바이트로 들어가는 값.

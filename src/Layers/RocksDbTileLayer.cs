@@ -1,10 +1,10 @@
 using System.Text;
-using Heliosen.TileServer.Configuration;
-using Heliosen.TileServer.Tiles;
+using Heliosen.TileFileServer.Configuration;
+using Heliosen.TileFileServer.Tiles;
 using Microsoft.Net.Http.Headers;
 using RocksDbSharp;
 
-namespace Heliosen.TileServer.Layers;
+namespace Heliosen.TileFileServer.Layers;
 
 /// <summary>
 /// DTB.RocksTileStore 로 만든 RocksDB 폴더 하나를 서비스한다.

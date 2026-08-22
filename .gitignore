@@ -1,1 +1,15 @@
-/deploy
+# 빌드 산출물 (하위 폴더 전부)
+bin/
+obj/
+
+# 배포 산출물
+/publish
+
+# 에디터 로컬 상태
+/.vs
+.idea/
+*.user
+
+# 시험용 타일 데이터
+# appsettings.json 의 기본 Root 가 "tiles" 라서 실행하면 여기에 생긴다.
+tiles/

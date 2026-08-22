@@ -1,0 +1,73 @@
+# Heliosen TileFileServer - systemd 유닛
+#
+#   sudo cp deploy/heliosen-tileserver.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now heliosen-tileserver
+#   journalctl -u heliosen-tileserver -f
+#
+# 아래 User / WorkingDirectory / TileServer__Root 를 환경에 맞게 고쳐서 쓴다.
+
+[Unit]
+Description=Heliosen TileFileServer (RocksDB tile server)
+Documentation=https://github.com/heliosen/Heliosen.TileFileServer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+User=tileserver
+Group=tileserver
+
+WorkingDirectory=/opt/heliosen-tileserver
+ExecStart=/opt/heliosen-tileserver/Heliosen.TileFileServer
+
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=TileServer__Root=/srv/tiles
+Environment=Kestrel__Endpoints__Http__Url=http://0.0.0.0:7080
+
+# 서버 GC. 처리량 차이가 크다.
+Environment=DOTNET_gcServer=1
+
+# ---------------------------------------------------------------------------
+# 파일 디스크립터
+#
+# RocksDB 는 DB 하나가 SST 파일 수백 개를 열어둔다.
+# (레이어 수 x MaxOpenFilesPerDb) 가 이 값을 넘으면 조회가 "Too many open files" 로 실패한다.
+# 기본값 1024 로는 레이어 서너 개가 한계다. 넉넉하게 잡는다.
+# ---------------------------------------------------------------------------
+LimitNOFILE=65535
+
+Restart=always
+RestartSec=5
+
+# 부팅 직후 마운트가 늦게 붙는 환경에서 재시작 루프에 빠지지 않게.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# 로그는 journald 로.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=heliosen-tileserver
+
+# ---------------------------------------------------------------------------
+# 강화(hardening)
+# 조회 전용 서버라 쓰기 권한이 필요 없다.
+# ---------------------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+# 타일 폴더는 읽기만 하면 된다. 실수로 원본을 건드릴 수 없게 못박는다.
+ReadOnlyPaths=/srv/tiles
+
+# 1024 미만 포트로 바인딩하려면 아래를 켠다(예: 80).
+# AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

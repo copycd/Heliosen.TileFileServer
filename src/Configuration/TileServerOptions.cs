@@ -1,4 +1,4 @@
-namespace Heliosen.TileServer.Configuration;
+namespace Heliosen.TileFileServer.Configuration;
 
 /// <summary>appsettings.json 의 "TileServer" 섹션.</summary>
 public sealed class TileServerOptions

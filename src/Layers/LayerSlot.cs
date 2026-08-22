@@ -1,4 +1,4 @@
-namespace Heliosen.TileServer.Layers;
+namespace Heliosen.TileFileServer.Layers;
 
 /// <summary>
 /// 레이어 하나의 수명을 쥐고 있는 칸.

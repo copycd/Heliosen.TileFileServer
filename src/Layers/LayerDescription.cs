@@ -1,4 +1,4 @@
-namespace Heliosen.TileServer.Layers;
+namespace Heliosen.TileFileServer.Layers;
 
 /// <summary>/admin/layers 응답용. 진단이 목적이다.</summary>
 public sealed class LayerDescription

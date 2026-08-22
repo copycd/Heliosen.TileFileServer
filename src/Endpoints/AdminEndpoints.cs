@@ -1,8 +1,8 @@
 using System.Net;
-using Heliosen.TileServer.Configuration;
-using Heliosen.TileServer.Layers;
+using Heliosen.TileFileServer.Configuration;
+using Heliosen.TileFileServer.Layers;
 
-namespace Heliosen.TileServer.Endpoints;
+namespace Heliosen.TileFileServer.Endpoints;
 
 /// <summary>
 /// 상태 확인과 운영용 경로.
@@ -109,11 +109,11 @@ internal static class AdminEndpoints
 
         var body = new System.Text.StringBuilder();
         body.Append("<!doctype html><meta charset=\"utf-8\">");
-        body.Append("<title>Heliosen TileServer</title>");
+        body.Append("<title>Heliosen TileFileServer</title>");
         body.Append("<style>body{font:14px/1.6 system-ui,sans-serif;margin:2rem;max-width:60rem}");
         body.Append("code{background:#f4f4f5;padding:.1rem .3rem;border-radius:3px}");
         body.Append("li{margin:.2rem 0}</style>");
-        body.Append("<h1>Heliosen TileServer</h1>");
+        body.Append("<h1>Heliosen TileFileServer</h1>");
         body.Append("<p>version ").Append(WebUtility.HtmlEncode(version));
         body.Append(" &middot; root <code>").Append(WebUtility.HtmlEncode(catalog.Root)).Append("</code></p>");
 

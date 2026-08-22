@@ -1,5 +1,5 @@
 
-namespace Heliosen.TileServer.Tiles;
+namespace Heliosen.TileFileServer.Tiles;
 
 /// <summary>포맷 종류 ↔ 확장자 ↔ MIME 변환.</summary>
 public static class TileFormat

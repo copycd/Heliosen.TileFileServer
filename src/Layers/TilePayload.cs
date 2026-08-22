@@ -1,6 +1,6 @@
 using Microsoft.Net.Http.Headers;
 
-namespace Heliosen.TileServer.Layers;
+namespace Heliosen.TileFileServer.Layers;
 
 /// <summary>
 /// 응답으로 내보낼 내용. Bytes 또는 PhysicalPath 중 하나만 채운다.

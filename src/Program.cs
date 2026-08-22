@@ -1,9 +1,9 @@
-using Heliosen.TileServer;
-using Heliosen.TileServer.Configuration;
-using Heliosen.TileServer.Endpoints;
-using Heliosen.TileServer.Layers;
+using Heliosen.TileFileServer;
+using Heliosen.TileFileServer.Configuration;
+using Heliosen.TileFileServer.Endpoints;
+using Heliosen.TileFileServer.Layers;
 
-Console.WriteLine($"Heliosen TileServer {Define.Version}");
+Console.WriteLine($"Heliosen TileFileServer {Define.Version}");
 
 var builder = WebApplication.CreateBuilder(args);
 

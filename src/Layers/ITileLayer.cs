@@ -1,4 +1,4 @@
-namespace Heliosen.TileServer.Layers;
+namespace Heliosen.TileFileServer.Layers;
 
 /// <summary>
 /// 하나의 레이어(= 루트 밑의 폴더 하나).

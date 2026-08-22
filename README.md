@@ -1,4 +1,4 @@
-# Heliosen TileServer
+# Heliosen TileFileServer
 
 `DTB.RocksTileStore` 로 만든 타일 DB 를 **nginx 처럼** HTTP 로 내보내는 서버.
 Windows / Linux 양쪽에서 같은 코드로 돈다.
@@ -17,16 +17,16 @@ Windows / Linux 양쪽에서 같은 코드로 돈다.
 ## 빠르게 띄우기
 
 ```bash
-dotnet run --project src/Heliosen.TileServer
+dotnet run --project src
 ```
 
 타일 루트를 지정해서:
 
 ```bash
-TileServer__Root=/srv/tiles dotnet run --project src/Heliosen.TileServer
+TileServer__Root=/srv/tiles dotnet run --project src
 ```
 
-기본 포트는 `8080`. 브라우저로 `http://localhost:8080/` 을 열면 현재 서비스 중인 레이어 목록이 나온다.
+기본 포트는 `7080`. 브라우저로 `http://localhost:7080/` 을 열면 현재 서비스 중인 레이어 목록이 나온다.
 
 표본 DB 로 시험해보려면:
 
@@ -125,8 +125,18 @@ nginx 의 `access_log off` 에 해당한다. 요청 단위 추적이 필요하�
 포트는 `Kestrel` 섹션에서:
 
 ```bash
-Kestrel__Endpoints__Http__Url=http://0.0.0.0:8080
+Kestrel__Endpoints__Http__Url=http://0.0.0.0:7080
 ```
+
+> 포트는 `appsettings.json` **한 곳에서만** 정한다.
+> `launchSettings.json` 에 `applicationUrl` 을 적으면 `ASPNETCORE_URLS` 가 설정되고,
+> Kestrel 은 두 소스가 겹치는 것만 보고 (값이 같아도) 이런 경고를 낸다:
+> `Overriding address(es) ... Binding to endpoints defined via IConfiguration instead.`
+> 그래서 `launchSettings.json` 에는 일부러 `applicationUrl` 을 두지 않았다.
+>
+> `launchSettings.json` 은 `appsettings.json` 과 달리 **JSON 주석을 지원하지 않는다.**
+> 주석을 넣으면 파싱이 조용히 실패해서 프로필이 통째로 무시되고
+> (`ASPNETCORE_ENVIRONMENT=Development` 도 안 먹어서 Production 으로 뜬다).
 
 ---
 
@@ -191,9 +201,9 @@ rm -rf /srv/tiles/aaa && cp -r /staging/aaa /srv/tiles/aaa
 핸들을 먼저 놓게 해야 한다.
 
 ```bash
-curl -X POST "http://localhost:8080/admin/detach/aaa?seconds=60"
+curl -X POST "http://localhost:7080/admin/detach/aaa?seconds=60"
 # 이제 폴더를 교체한다
-curl -X POST "http://localhost:8080/admin/attach/aaa"
+curl -X POST "http://localhost:7080/admin/attach/aaa"
 ```
 
 `detach` 는 핸들을 놓고 지정한 시간 동안 그 이름을 다시 등록하지 않는다.
@@ -247,7 +257,7 @@ journalctl -u heliosen-tileserver -f
 서비스로 돌리려면 **NSSM** 을 권한다. 이 서버는 콘솔 앱이라 Windows 서비스 제어 신호를 직접 처리하지 않는다.
 
 ```powershell
-nssm install HeliosenTileServer C:\heliosen-tileserver\Heliosen.TileServer.exe
+nssm install HeliosenTileServer C:\heliosen-tileserver\Heliosen.TileFileServer.exe
 nssm set HeliosenTileServer AppEnvironmentExtra TileServer__Root=D:\tiles
 nssm start HeliosenTileServer
 ```
@@ -262,7 +272,7 @@ nssm start HeliosenTileServer
 
 ```nginx
 location / {
-    proxy_pass http://127.0.0.1:8080;
+    proxy_pass http://127.0.0.1:7080;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
 
@@ -328,7 +338,7 @@ Windows/Linux 양쪽 배포에는 복제가 참조보다 비용이 싸다.
 ## 구조
 
 ```
-src/Heliosen.TileServer/
+src/
 ├── Program.cs                     기동, Kestrel/CORS 설정
 ├── Configuration/
 │   ├── TileServerOptions.cs       설정

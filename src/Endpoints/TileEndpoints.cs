@@ -1,8 +1,8 @@
-using Heliosen.TileServer.Configuration;
-using Heliosen.TileServer.Layers;
-using Heliosen.TileServer.Tiles;
+using Heliosen.TileFileServer.Configuration;
+using Heliosen.TileFileServer.Layers;
+using Heliosen.TileFileServer.Tiles;
 
-namespace Heliosen.TileServer.Endpoints;
+namespace Heliosen.TileFileServer.Endpoints;
 
 /// <summary>
 /// 타일 서비스 경로.

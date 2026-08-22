@@ -1,4 +1,4 @@
-namespace Heliosen.TileServer;
+namespace Heliosen.TileFileServer;
 
 public static class Define
 {

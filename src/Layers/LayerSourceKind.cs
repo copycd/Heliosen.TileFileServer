@@ -1,4 +1,4 @@
-namespace Heliosen.TileServer.Layers;
+namespace Heliosen.TileFileServer.Layers;
 
 public enum LayerSourceKind
 {

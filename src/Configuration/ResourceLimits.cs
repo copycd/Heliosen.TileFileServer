@@ -1,4 +1,4 @@
-namespace Heliosen.TileServer.Configuration;
+namespace Heliosen.TileFileServer.Configuration;
 
 /// <summary>
 /// 파일 디스크립터 한도 확인.
