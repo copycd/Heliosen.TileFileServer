@@ -1,8 +1,1 @@
-bin/
-obj/
-publish/
-*.user
-.vs/
-.idea/
-tiles/
 /deploy
