@@ -28,7 +28,8 @@
 
   <ItemGroup>
     <!-- win-x64, linux-x64, linux-arm64, osx 네이티브가 모두 들어있는 패키지다. -->
-    <PackageReference Include="RocksDB" Version="11.1.2.3412" />
+    <PackageReference Include="DTB.RocksTileStore" Version="10.2608.24" />
+    <PackageReference Include="RocksDB" Version="11.8.1.4423" />
   </ItemGroup>
 
 </Project>
