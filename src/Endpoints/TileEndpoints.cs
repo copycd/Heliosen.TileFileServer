@@ -1,3 +1,4 @@
+using DTB.RocksTileStore;
 using Heliosen.TileFileServer.Configuration;
 using Heliosen.TileFileServer.Layers;
 using Heliosen.TileFileServer.Tiles;
@@ -111,7 +112,7 @@ internal static class TileEndpoints
     private static TilePayload? LookupTile(ITileLayer layer, int z, int x, int y, string? extension)
     {
         // 타일 포맷으로 아는 확장자면 곧바로 타일 키로 찾는다. 조회 한 번이다.
-        if (extension is null || TileFormat.FromExtension(extension) != TileFormatKind.Unknown)
+        if (extension is null || TileFormat.FromExtension(extension) != TileLayerFormatKind.Unknown)
             return layer.GetTile(z, x, y, extension);
 
         // 타일 포맷이 아닌 확장자다(.b3dm, .pnts, .json ...).

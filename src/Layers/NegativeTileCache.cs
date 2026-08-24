@@ -1,3 +1,4 @@
+using DTB.RocksTileStore;
 using Heliosen.TileFileServer.Tiles;
 
 namespace Heliosen.TileFileServer.Layers;
@@ -34,10 +35,10 @@ internal sealed class NegativeTileCache
 
     public long Count => Volatile.Read(ref _count);
 
-    public bool Contains(TileFormatKind kind, byte level, uint col, uint row) =>
+    public bool Contains(TileLayerFormatKind kind, byte level, uint col, uint row) =>
         TryPack(kind, level, col, row, out var key) && _missing.ContainsKey(key);
 
-    public void Add(TileFormatKind kind, byte level, uint col, uint row)
+    public void Add(TileLayerFormatKind kind, byte level, uint col, uint row)
     {
         if (!TryPack(kind, level, col, row, out var key))
             return;
@@ -64,7 +65,7 @@ internal sealed class NegativeTileCache
     ///   kind 8bit | level 8bit | col 24bit | row 24bit
     /// col/row 24 비트는 레벨 23 까지 커버한다. 그보다 크면 캐시하지 않는다(그럴 일은 없다).
     /// </summary>
-    private static bool TryPack(TileFormatKind kind, byte level, uint col, uint row, out long packed)
+    private static bool TryPack(TileLayerFormatKind kind, byte level, uint col, uint row, out long packed)
     {
         if (col > 0xFFFFFF || row > 0xFFFFFF)
         {

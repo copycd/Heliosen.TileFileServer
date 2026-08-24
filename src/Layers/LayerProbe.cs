@@ -32,8 +32,9 @@ internal static class LayerProbe
             if (!Directory.Exists(path))
                 return false;
 
+            // RocksDB 인지 아닌지는 DB 를 만든 쪽과 같은 판정을 쓴다.
             var currentPath = Path.Combine(path, "CURRENT");
-            if (File.Exists(currentPath))
+            if (DTB.RocksTileStore.RocksDBUtils.IsRocksDBDirectory(path))
             {
                 // MANIFEST 는 보통 하나지만, 교체 중에 잠깐 둘이 보일 수 있다.
                 // 이름이 증가하는 규칙이라 가장 큰 것을 쓰면 안정적이다.

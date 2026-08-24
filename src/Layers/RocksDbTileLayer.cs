@@ -1,8 +1,10 @@
 using System.Text;
+using DTB.RocksTileStore;
 using Heliosen.TileFileServer.Configuration;
 using Heliosen.TileFileServer.Tiles;
 using Microsoft.Net.Http.Headers;
 using RocksDbSharp;
+using RocksStore = DTB.RocksTileStore.RocksTileStore;
 
 namespace Heliosen.TileFileServer.Layers;
 
@@ -37,13 +39,13 @@ internal sealed class RocksDbTileLayer : ITileLayer
     public string Path { get; }
 
     /// <summary>DB 의 대표 포맷. 확장자 없는 요청과 확장자 대체에 쓴다.</summary>
-    public TileFormatKind PrimaryKind { get; }
+    public TileLayerFormatKind PrimaryKind { get; }
 
     /// <summary>빌더가 넣어둔 "ContentsType" 값(TileRaster / TileTerrain / 3DTiles). 없을 수도 있다.</summary>
     public string? ContentsType { get; }
 
     /// <summary>타일 키가 하나도 없는 DB(3D Tiles 처럼 경로 문자열 키만 쓰는 저장소).</summary>
-    public bool HasTileKeys => PrimaryKind != TileFormatKind.Unknown;
+    public bool HasTileKeys => PrimaryKind != TileLayerFormatKind.Unknown;
 
     private RocksDbTileLayer(
         string name,
@@ -82,7 +84,7 @@ internal sealed class RocksDbTileLayer : ITileLayer
         TileServerOptions options,
         ILogger log)
     {
-        if (!IsRocksDbDirectory(path))
+        if (!RocksDBUtils.IsRocksDBDirectory(path))
             throw new DirectoryNotFoundException($"RocksDB 폴더가 아닙니다: {path}");
 
         var db = RocksDb.OpenReadOnly(env.CreateDbOptions(), path, errorIfLogFileExists: false);
@@ -116,19 +118,6 @@ internal sealed class RocksDbTileLayer : ITileLayer
         }
     }
 
-    /// <summary>DTB.RocksTileStore.RocksDBUtils.IsRocksDBDirectory 와 같은 판정.</summary>
-    public static bool IsRocksDbDirectory(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
-            return false;
-
-        if (!File.Exists(System.IO.Path.Combine(path, "CURRENT")))
-            return false;
-
-        // EnumerateFiles 는 첫 항목만 보고 끝낼 수 있어서 GetFiles 보다 싸다.
-        return Directory.EnumerateFiles(path, "MANIFEST-*").Any();
-    }
-
     public TilePayload? GetTile(int z, int x, int y, string? extension)
     {
         // 레벨은 키에서 1 바이트다. 범위를 넘으면 조회 자체가 무의미하다.
@@ -136,7 +125,7 @@ internal sealed class RocksDbTileLayer : ITileLayer
             return null;
 
         var kind = ResolveKind(TileFormat.FromExtension(extension));
-        if (kind == TileFormatKind.Unknown)
+        if (kind == TileLayerFormatKind.Unknown)
             return null;
 
         return ReadTile(kind, (byte)z, (uint)x, (uint)y);
@@ -149,10 +138,10 @@ internal sealed class RocksDbTileLayer : ITileLayer
     /// (없는 포맷으로 먼저 찾아보고 실패하면 다시 찾는 식으로 하면 miss 비용이 두 배가 된다.
     ///  블룸 필터가 없는 DB 라서 그 두 배가 그대로 두 배로 온다.)
     /// </summary>
-    private TileFormatKind ResolveKind(TileFormatKind requested)
+    private TileLayerFormatKind ResolveKind(TileLayerFormatKind requested)
     {
         // 확장자가 없으면 DB 의 대표 포맷으로.
-        if (requested == TileFormatKind.Unknown)
+        if (requested == TileLayerFormatKind.Unknown)
             return PrimaryKind;
 
         // DB 에 실제로 있는 포맷이면 그대로.
@@ -161,17 +150,18 @@ internal sealed class RocksDbTileLayer : ITileLayer
 
         // 없는 포맷을 요청했다. 대체를 허용하면 대표 포맷으로 내보낸다.
         // Content-Type 은 실제로 읽어낸 바이트의 포맷을 따라가므로 거짓말을 하지 않는다.
-        return _options.ExtensionFallback ? PrimaryKind : TileFormatKind.Unknown;
+        return _options.ExtensionFallback ? PrimaryKind : TileLayerFormatKind.Unknown;
     }
 
-    private TilePayload? ReadTile(TileFormatKind kind, byte level, uint col, uint row)
+    private TilePayload? ReadTile(TileLayerFormatKind kind, byte level, uint col, uint row)
     {
         if (_negative is not null && _negative.Contains(kind, level, col, row))
             return null;
 
-        // 키는 10 바이트다. 스택에 잡으면 요청당 할당이 없다.
-        Span<byte> key = stackalloc byte[TileKey.Size];
-        TileKey.Write(key, kind, level, col, row);
+        // 키 인코딩은 DB 를 만든 쪽과 반드시 같아야 하므로 DTB.RocksTileStore 것을 그대로 쓴다.
+        // 10 바이트 배열이 요청마다 하나 생기지만(스택에 직접 쓰던 예전 방식과의 차이),
+        // 포맷 정의가 한 곳에만 있는 값이 그보다 크다. 실측으로도 처리량 차이가 없었다.
+        var key = RocksStore.EncodeTileKey(kind, level, col, row);
 
         var bytes = _db.Get(key, null, _readOptions);
 
@@ -236,7 +226,7 @@ internal sealed class RocksDbTileLayer : ITileLayer
         return value is { Length: > 0 } ? value : null;
     }
 
-    private static string? DetectEncoding(TileFormatKind kind, ReadOnlySpan<byte> bytes)
+    private static string? DetectEncoding(TileLayerFormatKind kind, ReadOnlySpan<byte> bytes)
     {
         // jpg/png 는 이미 압축된 포맷이라 gzip 으로 감싸 저장하지 않는다. 검사도 건너뛴다.
         if (!TileFormat.MayBeGzipped(kind))
@@ -254,10 +244,10 @@ internal sealed class RocksDbTileLayer : ITileLayer
     /// 키가 [kind][level][col BE][row BE] 이고 RocksDB 가 바이트 사전순으로 정렬하므로,
     /// 포맷 하나마다 Seek 한 번씩(총 5 번)이면 끝난다. 전체를 훑을 필요가 없다.
     /// </summary>
-    private static uint ProbeKinds(RocksDb db, RocksDbEnvironment env, out TileFormatKind primary)
+    private static uint ProbeKinds(RocksDb db, RocksDbEnvironment env, out TileLayerFormatKind primary)
     {
         uint mask = 0;
-        primary = TileFormatKind.Unknown;
+        primary = TileLayerFormatKind.Unknown;
 
         using var iterator = db.NewIterator(readOptions: env.CreateScanOptions());
 
@@ -276,10 +266,10 @@ internal sealed class RocksDbTileLayer : ITileLayer
                 break;
 
             var key = iterator.Key();
-            if (TileKey.IsTileKey(key) && key[0] == (byte)kind)
+            if (key.Length == RocksStore.KeySize && key[0] == (byte)kind)
             {
                 mask |= 1u << (byte)kind;
-                if (primary == TileFormatKind.Unknown)
+                if (primary == TileLayerFormatKind.Unknown)
                     primary = kind;
             }
         }
@@ -291,7 +281,7 @@ internal sealed class RocksDbTileLayer : ITileLayer
     {
         try
         {
-            var value = db.Get(Encoding.UTF8.GetBytes("ContentsType"));
+            var value = db.Get(Encoding.UTF8.GetBytes(DbContentsType.HEAD_ContentsType));
             return value is { Length: > 0 } ? Encoding.UTF8.GetString(value) : null;
         }
         catch
@@ -336,7 +326,7 @@ internal sealed class RocksDbTileLayer : ITileLayer
     /// 조회 전용 핸들은 열린 시점의 스냅샷을 보므로, 이 값들이 같으면 내용도 같다.
     /// 응답마다 수십 KB 를 해시하지 않아도 되니 CPU 가 훨씬 덜 든다.
     /// </summary>
-    private EntityTagHeaderValue MakeETag(TileFormatKind kind, byte level, uint col, uint row, int length)
+    private EntityTagHeaderValue MakeETag(TileLayerFormatKind kind, byte level, uint col, uint row, int length)
     {
         var tag = string.Concat(
             "\"", _etagSeed, "-",
@@ -372,7 +362,7 @@ internal sealed class RocksDbTileLayer : ITileLayer
         Source = Source,
         Path = Path,
         State = state,
-        Format = PrimaryKind == TileFormatKind.Unknown ? null : TileFormat.ExtensionOf(PrimaryKind),
+        Format = PrimaryKind == TileLayerFormatKind.Unknown ? null : TileFormat.ExtensionOf(PrimaryKind),
         Formats = AvailableKinds().ToArray(),
         ContentsType = ContentsType,
         Error = error,

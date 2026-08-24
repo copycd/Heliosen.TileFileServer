@@ -52,7 +52,11 @@ dotnet run --project tools/SampleStore -- ./tiles
 | `/version` | 버전 |
 
 확장자 → 포맷: `jpg`/`jpeg`→1, `png`→2, `terrain`→5, `raw`→6, `pbf`/`mvt`→10.
-이 숫자는 `DTB.RocksTileStore.TileLayerFormatKind` 와 **같아야** 한다.
+
+이 숫자와 판정은 **`DTB.RocksTileStore` 것을 그대로 쓴다** — 열거형(`TileLayerFormatKind`),
+키 인코딩(`RocksTileStore.EncodeTileKey`), 확장자 판정(`RocksTileStoreUtils.GetLayerFormatKind`) 모두
+DB 를 만드는 쪽과 같은 코드다. 그래서 포맷 바이트가 서버와 빌더 사이에서 어긋날 수 없다.
+`pbf`/`mvt`/`vector` 만 그쪽에 없어서 서버가 보탠다(빌더가 아직 벡터 타일을 만들지 않는다).
 
 **`ExtensionFallback`**(기본 켜짐): jpg 로 만든 DB 에 `.png` 로 요청이 와도 타일이 나간다.
 단 `Content-Type` 은 실제 바이트의 포맷(`image/jpeg`)으로 정직하게 보낸다. 끄면 nginx 처럼 딱 맞지 않으면 404.
@@ -254,6 +258,20 @@ journalctl -u heliosen-tileserver -f
 프레임워크 의존이 기본이라 대상 서버에 .NET 10 런타임이 필요하다.
 런타임을 깔 수 없으면 `-SelfContained` 를 준다.
 
+배포본에 들어가는 어셈블리 (Windows/Linux 동일):
+
+```
+Heliosen.TileFileServer.dll   서버
+DTB.RocksTileStore.dll        타일 키 / 포맷 정의 (빌더와 공유)
+CCd.IOs.dll, CCd.Core.dll     DTB.RocksTileStore 의 의존성
+Polly.dll, Polly.Core.dll     CCd.Core 의 의존성
+RocksDbSharp.dll              RocksDB 관리형 바인딩
+rocksdb.dll / librocksdb.so   RocksDB 네이티브 (약 12 MB)
+```
+
+`DTB.RocksTileStore` 는 `lib/net10.0` 에 IL 어셈블리 하나로 들어있어서(RID 중립)
+Windows 와 Linux 에서 같은 파일이 쓰인다. 난독화된 Release 빌드도 리눅스에서 확인했다.
+
 서비스로 돌리려면 **NSSM** 을 권한다. 이 서버는 콘솔 앱이라 Windows 서비스 제어 신호를 직접 처리하지 않는다.
 
 ```powershell
@@ -289,12 +307,16 @@ Windows 11, Release 빌드, 동시성 64, 로컬 루프백.
 
 | 시나리오 | RPS | p50 | p99 | 실패 |
 |---|---|---|---|---|
-| hit (있는 타일) | 232,160 | 0.17 ms | 0.70 ms | 0 |
-| miss (전부 없는 타일) | 168,275 | 0.23 ms | 1.44 ms | 0 |
-| mixed (70% hit) | 164,311 | 0.24 ms | 1.38 ms | 0 |
-| **chaos** (부하 중 detach/attach 34 회) | 218,566 | 0.21 ms | 0.89 ms | **0** |
+| hit (있는 타일) | 224,974 | 0.17 ms | 0.78 ms | 0 |
+| miss (전부 없는 타일) | 168,847 | 0.23 ms | 1.76 ms | 0 |
+| mixed (70% hit) | 172,549 | 0.24 ms | 1.27 ms | 0 |
+| **chaos** (부하 중 detach/attach 34 회) | 233,463 | 0.20 ms | 0.93 ms | **0** |
 
-chaos 는 20 초 동안 437 만 요청을 넣으면서 레이어를 계속 떼었다 붙인 것이다.
+키 인코딩을 `RocksTileStore.EncodeTileKey` 로 바꾸면서 요청마다 10 바이트 배열이 하나 생기지만
+(예전에는 스택에 직접 썼다), 위 수치는 바꾸기 전과 측정 오차 범위 안에서 같다.
+초당 20 만 요청이면 2 MB/s 인데 gen0 이 그냥 흡수한다.
+
+chaos 는 20 초 동안 468 만 요청을 넣으면서 레이어를 계속 떼었다 붙인 것이다.
 참조 카운트가 깨지면 해제된 메모리를 만져서 프로세스가 그대로 죽는데(관리 예외가 아니라 try/catch 로도 못 막는다),
 프로세스는 같은 PID 로 살아있었고 오류 로그도 0 줄이었다.
 
@@ -328,10 +350,25 @@ Linux(WSL2 Ubuntu, .NET 10)에서도 같은 바이너리로 전부 확인했다:
 버퍼가 넘치면 통째로 잃는다. 그래서 실제로 믿는 건 주기적 재훑기이고, 감시는 반응을 빠르게 하는 용도다.
 하위 폴더는 감시하지 않는다(DB 하나 복사에 SST 수천 개 이벤트가 쏟아져 버퍼를 넘긴다).
 
-**키 포맷을 복제한 이유** — `DTB.RocksTileStore` 를 참조하지 않고 10 바이트 키 코덱을 다시 정의했다.
-그 프로젝트가 `win-x64` / AOT / 난독화에 묶여있고 사설 패키지 피드에만 있어서,
-Windows/Linux 양쪽 배포에는 복제가 참조보다 비용이 싸다.
-대신 **숫자를 바꾸면 기존 DB 를 못 읽는다** — `TileFormatKind` 에 그 경고를 붙여뒀다.
+**포맷 정의는 DTB.RocksTileStore 것을 쓰고, DB 여는 것은 직접 한다** — 이 분담에는 이유가 있다.
+
+포맷 쪽(열거형, `EncodeTileKey`, `IsRocksDBDirectory`, `DbContentsType`, 확장자 판정)은
+빌더와 어긋나면 DB 를 아예 못 읽는 부분이라 반드시 한 곳에만 있어야 한다. 그래서 전부 위임했다.
+`EncodeTileKey` 가 서버가 쓰던 인코딩과 바이트 단위로 같은지 확인한 뒤에 바꿨다.
+
+반면 DB 를 여는 것은 `RocksTileStore` 를 쓰지 않고 `RocksDb.OpenReadOnly` 를 직접 호출한다.
+`RocksTileStore` 의 생성자가 `DbOptions` 를 내부에서 만들고 밖으로 열어주지 않기 때문에,
+그걸 쓰면 아래 세 가지를 지정할 방법이 없어진다.
+
+- **공유 블록 캐시** — 없으면 DB 마다 자기 캐시가 생겨서 메모리 상한이 사라진다
+- **`MaxOpenFiles`** — 없으면(기본 무제한) 리눅스에서 파일 디스크립터가 마른다
+- **`cache_index_and_filter_blocks`** — 없으면 인덱스/필터 블록이 캐시 밖에서 무제한으로 쌓인다
+
+레이어를 수십 개 얹는 서버에서는 이 셋이 OOM 과 "Too many open files" 를 가르는 부분이라
+포기할 수 없었다. (`RocksTileStore` 에 옵션을 받는 생성자가 생기면 이쪽도 위임할 수 있다.)
+
+또 하나, 조회에 쓰는 `TileLayerFormatKind` 값은 **바꾸면 기존 DB 를 못 읽는다.**
+이제 그 열거형은 빌더 쪽 코드이므로, 거기서 숫자를 바꾸면 양쪽이 함께 깨진다는 뜻이다.
 
 ---
 
@@ -344,9 +381,7 @@ src/
 │   ├── TileServerOptions.cs       설정
 │   └── ResourceLimits.cs          fd 한도 확인/경고
 ├── Tiles/
-│   ├── TileFormatKind.cs          포맷 바이트 (빌더와 동일해야 함)
-│   ├── TileFormat.cs              확장자 <-> 포맷 <-> MIME
-│   └── TileKey.cs                 10바이트 키 인코딩
+│   └── TileFormat.cs              MIME / gzip 판별 (포맷·키는 DTB.RocksTileStore 위임)
 ├── Layers/
 │   ├── ITileLayer.cs              레이어 인터페이스
 │   ├── RocksDbTileLayer.cs        RocksDB 조회
