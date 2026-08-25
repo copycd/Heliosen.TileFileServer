@@ -237,6 +237,19 @@ curl -X POST "http://localhost:7080/admin/attach/aaa"
 
 ## 배포
 
+빌드하는 OS 와 배포 대상 OS 는 **달라도 된다.** `dotnet publish -r <RID>` 는 크로스 컴파일이라
+윈도우에서 리눅스용을, 리눅스에서 윈도우용을 만들 수 있다. 네이티브 RocksDB 도 RID 에 맞는 것이
+NuGet 패키지에서 골라져 들어간다.
+
+| 만드는 곳 | 명령 | 결과 |
+|---|---|---|
+| Windows | `.\publish.ps1` | `publish\win-x64` |
+| Windows | `.\publish.ps1 -Rid linux-x64` | `publish\linux-x64` |
+| Linux | `./publish-linux.sh` | `publish/linux-x64` |
+
+`publish-linux.sh` 는 bash 스크립트라 PowerShell 에서는 실행되지 않는다.
+윈도우에서 리눅스용을 만들려면 `publish.ps1 -Rid linux-x64` 를 쓴다(WSL 도 필요 없다).
+
 ### Linux
 
 ```bash
@@ -249,13 +262,30 @@ journalctl -u heliosen-tileserver -f
 
 유닛 파일은 조회 전용 서버에 맞춰 강화해뒀다(`ProtectSystem=strict`, 타일 폴더는 `ReadOnlyPaths`).
 
+> **윈도우에서 만들어 옮겼다면 실행 권한을 다시 줘야 한다.**
+> NTFS 에는 실행 비트가 없어서 zip / scp 로 옮기면 `-rw-r--r--` 로 떨어지고
+> `./Heliosen.TileFileServer` 가 `Permission denied` 로 죽는다.
+>
+> ```bash
+> chmod +x Heliosen.TileFileServer
+> ```
+>
+> chmod 를 못 하는 상황이면 dll 을 직접 실행해도 된다(실행 비트가 필요 없다).
+> systemd 유닛의 `ExecStart` 도 이렇게 쓸 수 있다.
+>
+> ```bash
+> dotnet ./Heliosen.TileFileServer.dll
+> ```
+>
+> 리눅스에서 `./publish-linux.sh` 로 직접 만들면 이 문제가 없다(`chmod +x` 까지 해준다).
+
 ### Windows
 
 ```powershell
-.\publish-win.ps1
+.\publish.ps1
 ```
 
-> `publish-win.ps1` 은 **UTF-8 BOM 으로 저장해야 한다.**
+> `publish.ps1` 은 **UTF-8 BOM 으로 저장해야 한다.**
 > Windows PowerShell 5.1 은 BOM 이 없으면 스크립트를 시스템 코드페이지(한국어 Windows = 949)로
 > 읽어서 한글 메시지가 `?꾨즺` 처럼 깨진다. PowerShell 7 은 BOM 없이도 UTF-8 로 읽는다.
 > 편집기에서 다시 저장할 때 BOM 이 빠지지 않게 주의할 것.
