@@ -66,7 +66,7 @@ internal static class AdminEndpoints
         // 윈도우에서 DB 폴더를 제자리에 갈아끼우기 위한 것.
         // 열려있는 RocksDB 는 SST 파일을 잠그므로 폴더를 지우거나 이름을 바꿀 수 없다.
         // 떼어내서 핸들을 놓게 하고, 그 사이에 폴더를 교체한다.
-        admin.MapPost("/detach/{layer}", (string layer, int? seconds, LayerCatalog catalog) =>
+        admin.MapPost("/detach/{**layer}", (string layer, int? seconds, LayerCatalog catalog) =>
         {
             var window = seconds is > 0 ? seconds.Value : 60;
             var found = catalog.Detach(layer, window);
@@ -83,7 +83,7 @@ internal static class AdminEndpoints
         });
 
         // 떼어낸 레이어를 기다리지 않고 지금 되돌린다.
-        admin.MapPost("/attach/{layer}", (string layer, LayerCatalog catalog) =>
+        admin.MapPost("/attach/{**layer}", (string layer, LayerCatalog catalog) =>
         {
             catalog.Attach(layer);
             return Results.Json(new { attached = true, layer, count = catalog.Count });

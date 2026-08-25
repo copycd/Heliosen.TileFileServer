@@ -40,10 +40,24 @@ internal sealed class LayerCatalog : IDisposable
     /// <summary>_suppressedUntil 의 개수. 매 초 락을 잡지 않고 빨리 판단하기 위한 것.</summary>
     private int _suppressedCount;
 
-    private FileSystemWatcher? _watcher;
+    /// <summary>감시 중인 폴더들. 루트 + 묶음 폴더. _rescanGate 로 보호한다.</summary>
+    private readonly Dictionary<string, FileSystemWatcher> _watchers = new(PathComparer);
+
+    /// <summary>감시 폴더 수 상한. 묶음 폴더가 폭발적으로 많아지는 구성에서 핸들을 지킨다.</summary>
+    private const int MaxWatchers = 64;
+
+    private static readonly StringComparer PathComparer =
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
     private long _rescanDueTicks;
     private long _lastRescanTicks;
     private bool _rootMissingLogged;
+
+    /// <summary>
+    /// 이미 경고한 "빠진 파일 폴더" 목록. 재훑기마다 같은 경고를 반복하지 않기 위한 것이다.
+    /// 구성이 바뀌면 새 문자열이 되어 한 번 더 남는다. _rescanGate 로 보호한다.
+    /// </summary>
+    private readonly HashSet<string> _skippedWarnings = new(StringComparer.Ordinal);
     private bool _disposed;
 
     public string Root { get; }
@@ -75,10 +89,8 @@ internal sealed class LayerCatalog : IDisposable
             _log.LogWarning("타일 루트 폴더가 없습니다. 만들어지면 자동으로 인식합니다. Root={Root}", Root);
         }
 
+        // Rescan 안에서 감시 폴더(루트 + 묶음 폴더)까지 함께 맞춘다.
         Rescan();
-
-        if (_options.WatchFileSystem)
-            StartWatcher();
 
         if (_options.WarmupOnStart)
             Warmup();
@@ -281,20 +293,12 @@ internal sealed class LayerCatalog : IDisposable
         var next = new Dictionary<string, LayerSlot>(current.Count, StringComparer.OrdinalIgnoreCase);
         var seen = new HashSet<LayerSlot>();
 
-        foreach (var directory in Directory.EnumerateDirectories(Root))
+        var discovered = new List<DiscoveredLayer>();
+        var groupFolders = new List<string>();
+        CollectLayers(Root, prefix: string.Empty, depth: 1, discovered, groupFolders);
+
+        foreach (var (name, directory, sourceKind, fingerprint) in discovered)
         {
-            var name = Path.GetFileName(directory);
-
-            if (!IsServableName(name))
-                continue;
-
-            // 떼어내기(Detach) 중인 이름은 건너뛴다. 운영자가 폴더를 교체하는 중이다.
-            if (_suppressedUntil.ContainsKey(name))
-                continue;
-
-            if (!LayerProbe.TryClassify(directory, out var sourceKind, out var fingerprint))
-                continue;
-
             if (next.ContainsKey(name))
             {
                 // 리눅스에서는 대소문자만 다른 폴더가 공존할 수 있다.
@@ -347,11 +351,192 @@ internal sealed class LayerCatalog : IDisposable
 
         Volatile.Write(ref _layers, next.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase));
 
+        // 구조가 바뀌었을 수 있으니 감시 폴더도 맞춘다.
+        SyncWatchers(groupFolders);
+
         if (added > 0 || removed > 0)
         {
             _log.LogInformation(
                 "레이어 목록을 갱신했습니다. Total={Total} Added={Added} Removed={Removed}",
                 next.Count, added, removed);
+        }
+    }
+
+    private readonly record struct DiscoveredLayer(
+        string Name,
+        string Path,
+        LayerSourceKind SourceKind,
+        LayerFingerprint Fingerprint);
+
+    /// <summary>
+    /// 루트 밑을 훑어서 레이어가 될 폴더를 모은다.
+    ///
+    /// 판정 규칙 (폴더 D 하나에 대해):
+    ///  1. D 가 RocksDB 면 D 가 레이어다. **DB 안으로는 절대 들어가지 않는다.**
+    ///  2. D 의 하위(깊이 제한 내)에 RocksDB 가 하나라도 있으면 D 는 이름만 빌려주는 묶음 폴더다.
+    ///     레이어로 만들지 않고 하위에 같은 규칙을 적용한다.
+    ///  3. 하위에 RocksDB 가 전혀 없으면 **D 자체가** 파일 레이어다. 더 내려가지 않는다.
+    ///
+    /// 3번이 핵심이다. 파일 타일 폴더는 안이 z/x/y 로 되어 있어서, 더 내려가면
+    /// filelayer/7/12 처럼 레벨별로 쪼개져 버린다. 그래서 RocksDB 가 없는 가지는
+    /// **가장 얕은 곳에서** 레이어로 확정하고 멈춘다.
+    ///
+    /// 반환값은 "이 폴더의 하위에서 RocksDB 를 찾았는지" 다. 위 2번 판단에 쓴다.
+    /// </summary>
+    private bool CollectLayers(string directory, string prefix, int depth, List<DiscoveredLayer> found, List<string> groups)
+    {
+        IEnumerable<string> subdirectories;
+        try
+        {
+            subdirectories = Directory.EnumerateDirectories(directory);
+        }
+        catch (Exception ex)
+        {
+            // 권한 없는 폴더 하나 때문에 전체 훑기가 죽으면 안 된다.
+            _log.LogWarning(ex, "폴더를 읽을 수 없어 건너뜁니다. Path={Path}", directory);
+            return false;
+        }
+
+        var anyRocksBelow = false;
+
+        // RocksDB 가 아닌 폴더들. 하위를 다 본 뒤에 레이어로 만들지 결정한다.
+        List<DiscoveredLayer>? fileCandidates = null;
+
+        foreach (var sub in subdirectories)
+        {
+            var name = Path.GetFileName(sub);
+
+            if (!IsServableName(name))
+                continue;
+
+            var layerName = prefix.Length == 0 ? name : prefix + "/" + name;
+
+            // 떼어내기(Detach) 중인 이름은 건너뛴다. 운영자가 폴더를 교체하는 중이다.
+            if (_suppressedUntil.ContainsKey(layerName))
+                continue;
+
+            // 이름이 숫자뿐이면 타일 레벨(z) 폴더다. DB 일 수 없으니 "복사 중인 DB" 검사를 건너뛴다.
+            // 그 검사는 폴더 안을 훑어야 해서, 항목이 수천 개인 z 폴더에서 재훑기 비용을 지배한다.
+            var levelFolder = IsTileLevelName(name);
+
+            // 준비가 안 된 DB(복사 중)면 아예 건너뛴다. 안으로도 들어가지 않는다.
+            if (!LayerProbe.TryClassify(sub, out var sourceKind, out var fingerprint, checkPartial: !levelFolder))
+                continue;
+
+            if (sourceKind == LayerSourceKind.RocksDb)
+            {
+                found.Add(new DiscoveredLayer(layerName, sub, sourceKind, fingerprint));
+                anyRocksBelow = true;
+                continue;
+            }
+
+            // 하위에 RocksDB 가 있는지 따로 모아서 확인한다.
+            // 없으면 하위 결과를 통째로 버리고 이 폴더를 파일 레이어로 쓴다.
+            //
+            // 단, 이름이 숫자뿐인 폴더는 들어가지 않는다. 타일 레벨(z)이기 때문이다.
+            // 이 가지를 파고들면 z/x 폴더 수만큼(레벨 14 면 수만 개) 매번 훑게 되고,
+            // 재훑기 한 번이 초 단위로 늘어난다. 묶음 폴더 이름은 숫자만으로 짓지 않는다.
+            var below = new List<DiscoveredLayer>();
+            var rocksBelow = depth < _options.MaxLayerDepth
+                && !levelFolder
+                && CollectLayers(sub, layerName, depth + 1, below, groups);
+
+            if (rocksBelow)
+            {
+                // 묶음 폴더. 하위에서 확정된 레이어들을 그대로 채택한다.
+                found.AddRange(below);
+                anyRocksBelow = true;
+
+                // 이 폴더 안에서 레이어가 추가/삭제되는 것을 감시해야 한다.
+                groups.Add(sub);
+                continue;
+            }
+
+            (fileCandidates ??= []).Add(new DiscoveredLayer(layerName, sub, sourceKind, fingerprint));
+        }
+
+        // 가지 하나는 RocksDB 아니면 파일, 한 가지로만 쓴다.
+        // 이 폴더 아래에서 RocksDB 를 찾았다면 이 가지는 RocksDB 가지이므로,
+        // 같은 자리에 있던 파일 폴더 후보들은 레이어로 만들지 않는다.
+        //
+        // 단 루트는 예외다. 루트 바로 밑의 폴더들은 서로 독립된 가지이고,
+        // 여기서 섞이는 것("aaa 는 DB, ccc 는 파일 폴더")이 이 서버의 기본 사용법이다.
+        // 루트까지 한 가지로 묶으면 그 조합이 통째로 죽는다.
+        var branchIsRocks = depth > 1 && anyRocksBelow;
+
+        if (fileCandidates is null)
+            return anyRocksBelow;
+
+        if (!branchIsRocks)
+        {
+            found.AddRange(fileCandidates);
+            return anyRocksBelow;
+        }
+
+        // 조용히 빠지면 "왜 404 지?" 로 시간을 버린다. 무엇이 왜 빠졌는지 남긴다.
+        //
+        // 단 재훑기마다 같은 내용을 찍으면 30 초마다 로그가 쌓인다.
+        // 목록이 바뀔 때만 남긴다(_rootMissingLogged 와 같은 방식).
+        var skipped = string.Join(", ", fileCandidates.Select(static c => c.Name));
+
+        if (_skippedWarnings.Add(skipped))
+        {
+            _log.LogWarning(
+                "RocksDB 가지 안의 파일 폴더는 서비스하지 않습니다. Skipped={Skipped} (같은 가지에 RocksDB 가 있어서). " +
+                "서비스하려면 이 폴더를 RocksDB 가지 밖으로 옮기세요.",
+                skipped);
+        }
+
+        return anyRocksBelow;
+    }
+
+    /// <summary>
+    /// 이름이 숫자뿐인지. 파일 타일 폴더의 레벨(z) 폴더를 알아보기 위한 것이다.
+    ///
+    /// 타일 스킴은 z/x/y 가 전부 숫자이고, 사람이 짓는 묶음 폴더 이름(korea, asia)은 그렇지 않다.
+    /// 그래서 이 한 줄짜리 검사로 "여기부터는 타일 트리다" 를 구분해 파고들기를 멈춘다.
+    /// 디스크를 건드리지 않으므로 비용이 0 이다.
+    /// </summary>
+    private static bool IsTileLevelName(string name)
+    {
+        foreach (var c in name)
+        {
+            if (!char.IsAsciiDigit(c))
+                return false;
+        }
+
+        return name.Length > 0;
+    }
+
+    /// <summary>
+    /// URL 경로에서 레이어 이름을 떼어낸다. 가장 긴 접두사부터 맞춰본다.
+    ///
+    ///   "korea/seoul/layer.json"  ->  레이어 "korea/seoul" + 나머지 "layer.json"
+    ///   "aaa/tilemapresource.xml" ->  레이어 "aaa"         + 나머지 "tilemapresource.xml"
+    ///
+    /// 깊이가 얕아서(기본 3) 반복은 몇 번뿐이다.
+    /// </summary>
+    public bool TryResolveBlob(string path, out LayerSlot slot, out string remainder)
+    {
+        var layers = Volatile.Read(ref _layers);
+        var cut = path.Length;
+
+        while (true)
+        {
+            cut = path.LastIndexOf('/', cut - 1);
+
+            if (cut <= 0)
+            {
+                slot = null!;
+                remainder = string.Empty;
+                return false;
+            }
+
+            if (layers.TryGetValue(path[..cut], out slot!))
+            {
+                remainder = path[(cut + 1)..];
+                return remainder.Length > 0;
+            }
         }
     }
 
@@ -492,41 +677,88 @@ internal sealed class LayerCatalog : IDisposable
         }
     }
 
-    private void StartWatcher()
+    /// <summary>
+    /// 감시할 폴더를 현재 구조에 맞춘다. 루트 + 묶음 폴더들을 각각 **비재귀로** 감시한다.
+    ///
+    /// 왜 이렇게 하는가:
+    ///  - 재귀 감시(IncludeSubdirectories=true)를 켜면 DB 하나 복사에 SST 파일 수천 개의
+    ///    이벤트가 쏟아져서 감시 버퍼가 넘치고, 넘치는 순간 이벤트를 통째로 잃는다.
+    ///  - 루트만 감시하면 중첩 레이어(korea/seoul)의 추가·삭제를 놓친다.
+    ///    korea 안의 변화는 루트의 변화가 아니기 때문이다. 그러면 주기적 재훑기까지 기다려야 한다.
+    ///  - 묶음 폴더는 그 안에 DB 파일이 없고 폴더만 있으므로, 비재귀로 감시하면
+    ///    폴더 생성/삭제/이름변경만 몇 건 들어온다. 넘칠 일이 없다.
+    ///
+    /// 감시는 어디까지나 반응을 빠르게 하는 보조 수단이고, 믿는 것은 주기적 재훑기다.
+    /// </summary>
+    private void SyncWatchers(IReadOnlyCollection<string> groupFolders)
     {
-        if (!Directory.Exists(Root))
+        if (!_options.WatchFileSystem)
             return;
 
-        try
+        var previous = _watchers.Count;
+        var wanted = new HashSet<string>(PathComparer) { Root };
+
+        foreach (var folder in groupFolders)
         {
-            var watcher = new FileSystemWatcher(Root)
-            {
-                NotifyFilter = NotifyFilters.DirectoryName | NotifyFilters.FileName,
+            if (wanted.Count >= MaxWatchers)
+                break;
 
-                // 최상위만 본다.
-                // 하위까지 켜면 DB 하나를 복사할 때 SST 파일 수천 개의 이벤트가 쏟아져서
-                // 감시 버퍼가 넘치고, 넘치는 순간 이벤트를 통째로 잃는다.
-                // 어차피 주기적 재훑기가 실제로 믿는 수단이라 최상위만으로 충분하다.
-                IncludeSubdirectories = false,
-                InternalBufferSize = 64 * 1024,
-            };
-
-            watcher.Created += OnWatcherEvent;
-            watcher.Deleted += OnWatcherEvent;
-            watcher.Renamed += OnWatcherEvent;
-            watcher.Changed += OnWatcherEvent;
-            watcher.Error += OnWatcherError;
-            watcher.EnableRaisingEvents = true;
-
-            _watcher = watcher;
-            _log.LogInformation("루트 폴더를 감시합니다. Root={Root}", Root);
+            wanted.Add(folder);
         }
-        catch (Exception ex)
+
+        // 없어진 폴더의 감시를 정리한다.
+        foreach (var path in _watchers.Keys.Where(p => !wanted.Contains(p)).ToArray())
         {
-            // 감시는 편의 기능이다. 실패해도 주기적 재훑기로 계속 굴러간다.
-            _log.LogWarning(ex,
-                "폴더 감시를 시작하지 못했습니다. {Seconds}초 주기 재훑기로만 동작합니다.",
-                _options.RescanSeconds);
+            try
+            {
+                _watchers[path].Dispose();
+            }
+            catch
+            {
+                // 종료 중일 수 있다. 무시한다.
+            }
+
+            _watchers.Remove(path);
+        }
+
+        // 새로 생긴 폴더를 감시한다.
+        foreach (var path in wanted)
+        {
+            if (_watchers.ContainsKey(path) || !Directory.Exists(path))
+                continue;
+
+            try
+            {
+                var watcher = new FileSystemWatcher(path)
+                {
+                    NotifyFilter = NotifyFilters.DirectoryName | NotifyFilters.FileName,
+                    IncludeSubdirectories = false,
+                    InternalBufferSize = 64 * 1024,
+                };
+
+                watcher.Created += OnWatcherEvent;
+                watcher.Deleted += OnWatcherEvent;
+                watcher.Renamed += OnWatcherEvent;
+                watcher.Changed += OnWatcherEvent;
+                watcher.Error += OnWatcherError;
+                watcher.EnableRaisingEvents = true;
+
+                _watchers[path] = watcher;
+            }
+            catch (Exception ex)
+            {
+                // 감시는 편의 기능이다. 실패해도 주기적 재훑기로 계속 굴러간다.
+                _log.LogWarning(ex,
+                    "폴더 감시를 시작하지 못했습니다. Path={Path} ({Seconds}초 주기 재훑기로 대체)",
+                    path, _options.RescanSeconds);
+            }
+        }
+
+        if (_watchers.Count != previous)
+        {
+            _log.LogInformation(
+                "감시 폴더를 갱신했습니다. 루트 + 묶음 폴더 = {Count}개 (묶음 {Groups}개)",
+                _watchers.Count, Math.Max(0, _watchers.Count - 1));
         }
     }
 
@@ -549,14 +781,19 @@ internal sealed class LayerCatalog : IDisposable
 
         _disposed = true;
 
-        try
+        foreach (var watcher in _watchers.Values)
         {
-            _watcher?.Dispose();
+            try
+            {
+                watcher.Dispose();
+            }
+            catch
+            {
+                // 종료 중이다. 여기서 더 할 수 있는 게 없다.
+            }
         }
-        catch
-        {
-            // 종료 중이다. 여기서 더 할 수 있는 게 없다.
-        }
+
+        _watchers.Clear();
 
         lock (_rescanGate)
         {

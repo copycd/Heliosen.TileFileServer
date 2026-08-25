@@ -4,7 +4,8 @@ using Microsoft.Net.Http.Headers;
 namespace Heliosen.TileFileServer.Layers;
 
 /// <summary>
-/// RocksDB 가 아닌 그냥 파일 폴더를 서비스한다. nginx 로 타일을 내보내던 방식 그대로다.
+/// RocksDB 가 아닌 그냥 파일 폴더를 서비스한다. **일반 웹 서버처럼** 동작한다.
+/// 타일 규칙(좌표 범위, 확장자 추측)은 없다. URL 경로가 곧 파일 경로다.
 ///
 /// 바이트를 읽어서 넘기지 않고 **파일 경로만** 넘긴다.
 /// 그러면 ASP.NET 이 커널 sendfile 로 바로 내보내므로, 파일 내용이 관리 힙을 거치지 않는다.
@@ -15,9 +16,6 @@ namespace Heliosen.TileFileServer.Layers;
 /// </summary>
 internal sealed class FileSystemTileLayer : ITileLayer
 {
-    /// <summary>확장자 없이 요청이 왔을 때 찾아볼 순서.</summary>
-    private static readonly string[] ProbeExtensions = ["jpg", "png", "terrain", "pbf"];
-
     /// <summary>경로에 들어오면 안 되는 문자들. SearchValues 는 벡터화되어 있어 문자 하나씩 보는 것보다 빠르다.</summary>
     private static readonly System.Buffers.SearchValues<char> ForbiddenChars =
         System.Buffers.SearchValues.Create("\0|*?<>\"");
@@ -33,6 +31,9 @@ internal sealed class FileSystemTileLayer : ITileLayer
     public string Name { get; }
     public string Source => "FileSystem";
     public string Path => _root;
+
+    /// <summary>파일 폴더는 일반 웹 서버처럼 경로 그대로 서비스한다.</summary>
+    public bool ServesByPath => true;
 
     private FileSystemTileLayer(string name, string root)
     {
@@ -54,24 +55,16 @@ internal sealed class FileSystemTileLayer : ITileLayer
         return new FileSystemTileLayer(name, full);
     }
 
-    public TilePayload? GetTile(int z, int x, int y, string? extension)
-    {
-        if (z < 0 || x < 0 || y < 0)
-            return null;
-
-        if (!string.IsNullOrEmpty(extension))
-            return Resolve($"{z}/{x}/{y}.{extension}");
-
-        // 확장자를 안 준 요청은 흔한 것들을 순서대로 찾아본다.
-        foreach (var ext in ProbeExtensions)
-        {
-            var found = Resolve($"{z}/{x}/{y}.{ext}");
-            if (found is not null)
-                return found;
-        }
-
-        return null;
-    }
+    /// <summary>
+    /// 파일 폴더에는 타일 규칙이 없다. 경로를 그대로 찾는다.
+    ///
+    /// 확장자를 추측하지 않는다(예전에는 .jpg/.png/... 를 차례로 찾아봤다).
+    /// 일반 웹 서버는 없는 파일에 대해 다른 확장자를 뒤지지 않고 그냥 404 다.
+    /// </summary>
+    public TilePayload? GetTile(int z, int x, int y, string? extension) =>
+        Resolve(string.IsNullOrEmpty(extension)
+            ? $"{z}/{x}/{y}"
+            : $"{z}/{x}/{y}.{extension}");
 
     public TilePayload? GetBlob(string relativePath) => Resolve(relativePath);
 

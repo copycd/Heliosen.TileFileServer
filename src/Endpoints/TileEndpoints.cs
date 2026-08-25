@@ -22,16 +22,15 @@ internal static class TileEndpoints
     private static readonly IResult ServiceUnavailable = Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
 
     /// <summary>
-    /// z 상한. 키에서 레벨은 1 바이트지만 현실적인 상한을 둔다.
-    /// x/y 상한은 일부러 넉넉하게 둔다 - 타일 스킴이 여러 가지라(2-base 4326 등)
-    /// 지나치게 조이면 정상 요청을 400 으로 막게 된다. 어차피 못 찾으면 404 다.
+    /// 레이어 경로 조각의 라우트 키. 요청마다 $"p{i}" 로 문자열을 만들지 않으려고 미리 잡아둔다.
+    /// (MaxLayerDepth 를 나중에 올려도 되게 여유를 둔다. 현재 상한은 4 다.)
     /// </summary>
-    private const int MaxLevel = 30;
-
-    private const int MaxIndex = 1 << 24;
+    private static readonly string[] SegmentKeys = ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"];
 
     public static void Map(WebApplication app, TileServerOptions options)
     {
+        var maxDepth = Math.Clamp(options.MaxLayerDepth, 1, SegmentKeys.Length);
+
         // Cache-Control 값은 프로세스가 사는 동안 고정이다.
         // 요청마다 타입 헤더 객체를 만들어 문자열로 다시 조립하면 그게 그대로 낭비다.
         // 한 번 만들어 두고 헤더에 그 문자열만 꽂는다.
@@ -43,23 +42,73 @@ internal static class TileEndpoints
         // (본문을 빼는 것은 ASP.NET 의 파일 결과 처리기가 알아서 한다.)
         string[] getAndHead = ["GET", "HEAD"];
 
-        // 확장자가 있는 타일.
-        app.MapMethods("/{layer}/{z:int}/{x:int}/{y:int}.{ext}", getAndHead, (
-            string layer, int z, int x, int y, string ext,
-            LayerCatalog catalog, HttpContext context) =>
-                ServeTile(catalog, cacheControl, context, layer, z, x, y, ext));
+        // 레이어 이름이 폴더 여러 단이 될 수 있으므로(korea/seoul) 깊이마다 경로를 등록한다.
+        //
+        // 포괄 경로(/{**path}) 하나로 받아서 직접 쪼개는 방법도 있지만, 그러면 z/x/y 를
+        // 손으로 파싱해야 하고 {z:int} 제약이 주는 조기 거절도 잃는다.
+        // 깊이마다 등록하면 깊이 1(대부분의 경우)은 예전과 완전히 같은 경로를 탄다.
+        for (var depth = 1; depth <= maxDepth; depth++)
+        {
+            var prefix = BuildLayerTemplate(depth);
+            var captured = depth;
 
-        // 확장자 없는 타일. DB 의 대표 포맷으로 내보낸다.
-        app.MapMethods("/{layer}/{z:int}/{x:int}/{y:int}", getAndHead, (
-            string layer, int z, int x, int y,
-            LayerCatalog catalog, HttpContext context) =>
-                ServeTile(catalog, cacheControl, context, layer, z, x, y, extension: null));
+            // 확장자가 있는 타일.
+            app.MapMethods($"{prefix}/{{z:int}}/{{x:int}}/{{y:int}}.{{ext}}", getAndHead, (
+                int z, int x, int y, string ext,
+                LayerCatalog catalog, HttpContext context) =>
+                    ServeTile(catalog, cacheControl, context, ReadLayerName(context, captured), captured, z, x, y, ext));
+
+            // 확장자 없는 타일. DB 의 대표 포맷으로 내보낸다.
+            app.MapMethods($"{prefix}/{{z:int}}/{{x:int}}/{{y:int}}", getAndHead, (
+                int z, int x, int y,
+                LayerCatalog catalog, HttpContext context) =>
+                    ServeTile(catalog, cacheControl, context, ReadLayerName(context, captured), captured, z, x, y, extension: null));
+        }
 
         // 나머지 전부. layer.json, tilemapresource.xml, tileset.json, 3D Tiles 조각 등.
-        app.MapMethods("/{layer}/{**path}", getAndHead, (
-            string layer, string path,
+        // 레이어 이름 길이를 모르니 카탈로그에서 가장 긴 접두사를 찾아 떼어낸다.
+        app.MapMethods("/{**path}", getAndHead, (
+            string path,
             LayerCatalog catalog, HttpContext context) =>
-                ServeBlob(catalog, cacheControl, context, layer, path));
+                ServeBlob(catalog, cacheControl, context, path));
+    }
+
+    /// <summary>"/{p1}", "/{p1}/{p2}", ... 형태의 경로 접두사를 만든다.</summary>
+    private static string BuildLayerTemplate(int depth)
+    {
+        var builder = new System.Text.StringBuilder(depth * 6);
+
+        for (var i = 1; i <= depth; i++)
+            builder.Append("/{").Append(SegmentKeys[i - 1]).Append('}');
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// 경로 조각들을 합쳐 레이어 이름을 만든다.
+    /// 깊이 1 이면 조각 하나를 그대로 쓰므로 문자열을 새로 만들지 않는다(가장 흔한 경우).
+    /// </summary>
+    private static string? ReadLayerName(HttpContext context, int depth)
+    {
+        var values = context.Request.RouteValues;
+
+        if (depth == 1)
+            return values[SegmentKeys[0]] as string;
+
+        var builder = new System.Text.StringBuilder(64);
+
+        for (var i = 0; i < depth; i++)
+        {
+            if (i > 0)
+                builder.Append('/');
+
+            if (values[SegmentKeys[i]] is not string segment || segment.Length == 0)
+                return null;
+
+            builder.Append(segment);
+        }
+
+        return builder.ToString();
     }
 
     private static string? BuildCacheControl(TileServerOptions options)
@@ -76,11 +125,12 @@ internal static class TileEndpoints
         LayerCatalog catalog,
         string? cacheControl,
         HttpContext context,
-        string layerName,
+        string? layerName,
+        int layerDepth,
         int z, int x, int y,
         string? extension)
     {
-        if (z < 0 || z > MaxLevel || x < 0 || y < 0 || x >= MaxIndex || y >= MaxIndex)
+        if (string.IsNullOrEmpty(layerName))
             return NotFound;
 
         if (!catalog.TryGetSlot(layerName, out var slot))
@@ -93,7 +143,24 @@ internal static class TileEndpoints
 
         try
         {
-            var payload = LookupTile(layer, z, x, y, extension);
+            TilePayload? payload;
+
+            if (layer.ServesByPath)
+            {
+                // 파일 폴더는 **URL 을 그대로** 파일 경로로 쓴다.
+                // 라우트에서 파싱한 z/x/y 로 다시 조립하면 "07" 이 "7" 이 되어
+                // 실제로 있는 07/12/99.png 를 못 찾는다. 규칙을 두지 않는 게 요점이다.
+                var relative = RelativePathAfterLayer(context.Request.Path, layerDepth);
+                payload = relative is null ? null : layer.GetBlob(relative);
+            }
+            else
+            {
+                // 임의의 상한은 두지 않는다. 잘못 넣은 좌표는 키가 없으니 그냥 404 다.
+                // (키 포맷이 표현할 수 없는 값 - 음수, 레벨 255 초과 - 은 레이어에서 걸러 404 로 만든다.
+                //  거기서 안 걸면 (byte)z 가 감싸돌아서 '다른 타일'을 내보내게 된다.)
+                payload = LookupTile(layer, z, x, y, extension);
+            }
+
             return payload is null ? NotFound : Write(context, cacheControl, payload);
         }
         catch (Exception ex)
@@ -107,6 +174,31 @@ internal static class TileEndpoints
         {
             slot.Release();
         }
+    }
+
+    /// <summary>
+    /// URL 경로에서 앞의 레이어 이름 조각들을 떼어내고 나머지를 그대로 돌려준다.
+    ///
+    /// 라우트 값으로 경로를 재조립하지 않는 이유가 이것이다.
+    /// {z:int} 는 "07" 을 7 로 바꿔버려서 원래 파일 이름을 잃는다.
+    /// Request.Path 는 이미 퍼센트 디코딩된 값이라 그대로 파일 경로로 쓸 수 있다.
+    /// </summary>
+    private static string? RelativePathAfterLayer(PathString path, int layerDepth)
+    {
+        var value = path.Value;
+        if (string.IsNullOrEmpty(value))
+            return null;
+
+        // value 는 '/' 로 시작한다. 레이어 이름 조각 수만큼 '/' 를 넘어간다.
+        var cut = 0;
+        for (var i = 0; i < layerDepth; i++)
+        {
+            cut = value.IndexOf('/', cut + 1);
+            if (cut < 0)
+                return null;
+        }
+
+        return cut + 1 < value.Length ? value[(cut + 1)..] : null;
     }
 
     private static TilePayload? LookupTile(ITileLayer layer, int z, int x, int y, string? extension)
@@ -126,7 +218,6 @@ internal static class TileEndpoints
         LayerCatalog catalog,
         string? cacheControl,
         HttpContext context,
-        string layerName,
         string path)
     {
         if (string.IsNullOrEmpty(path))
@@ -137,7 +228,8 @@ internal static class TileEndpoints
         if (path.Contains("..", StringComparison.Ordinal))
             return NotFound;
 
-        if (!catalog.TryGetSlot(layerName, out var slot))
+        // 레이어 이름이 몇 단인지 모르니 가장 긴 접두사부터 맞춰본다.
+        if (!catalog.TryResolveBlob(path, out var slot, out var relative))
             return NotFound;
 
         if (!slot.TryAcquire(out var layer, out var openError))
@@ -145,12 +237,12 @@ internal static class TileEndpoints
 
         try
         {
-            var payload = layer.GetBlob(path);
+            var payload = layer.GetBlob(relative);
             return payload is null ? NotFound : Write(context, cacheControl, payload);
         }
         catch (Exception ex)
         {
-            LogReadFailure(context, ex, layerName, path);
+            LogReadFailure(context, ex, slot.Name, relative);
             return Results.StatusCode(StatusCodes.Status500InternalServerError);
         }
         finally

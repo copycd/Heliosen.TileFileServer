@@ -13,6 +13,26 @@ public sealed class TileServerOptions
     public string Root { get; set; } = "tiles";
 
     /// <summary>
+    /// 레이어 이름이 가질 수 있는 폴더 깊이. 1 이면 최상위 폴더만 레이어가 된다.
+    ///
+    ///   MaxLayerDepth = 1 :  {Root}/aaa            -> /aaa/12/345/4455.jpg
+    ///   MaxLayerDepth = 2 :  {Root}/korea/seoul    -> /korea/seoul/12/345/4455.jpg
+    ///
+    /// 루트 바로 밑의 폴더 하나하나가 독립된 "가지" 이고, 가지 안에서는 이 규칙을 따른다.
+    ///  - 폴더가 RocksDB 면 그게 마지막이다. **DB 안으로는 절대 들어가지 않는다.**
+    ///  - 가지 안에 RocksDB 가 하나라도 있으면 그 가지는 통째로 RocksDB 가지다.
+    ///    중간 폴더는 이름만 빌려주는 묶음 폴더가 되고, 그 가지의 파일 폴더는 서비스하지 않는다.
+    ///  - 가지 안에 RocksDB 가 전혀 없으면 가지의 맨 윗 폴더 하나가 파일 레이어다.
+    ///
+    /// 즉 한 가지는 RocksDB 아니면 파일, 한 종류로만 쓴다.
+    /// 마지막 항목 덕분에 z/x/y 로 된 파일 타일 폴더가 레벨별로 쪼개지지 않는다.
+    ///
+    /// 또 이름이 숫자뿐인 폴더는 타일 레벨(z)로 보고 파고들지 않는다.
+    /// 그게 없으면 파일 타일 폴더를 훑을 때마다 z/x 폴더 수만큼 디스크를 뒤진다.
+    /// </summary>
+    public int MaxLayerDepth { get; set; } = 3;
+
+    /// <summary>
     /// 루트를 다시 훑는 주기(초). 0 이면 끈다.
     ///
     /// FileSystemWatcher 는 네트워크 드라이브 / 컨테이너 볼륨 / NFS 에서 이벤트를 놓치는 일이 흔하다.
@@ -114,6 +134,9 @@ public sealed class TileServerOptions
     /// <summary>말이 안 되는 값을 안전한 값으로 끌어올린다. 설정 오타로 서버가 죽지 않게.</summary>
     public void Normalize()
     {
+        // 라우팅에서 깊이마다 경로를 등록하므로 상한을 둔다.
+        MaxLayerDepth = Math.Clamp(MaxLayerDepth, 1, 4);
+
         if (BlockCacheMB < 8) BlockCacheMB = 8;
         if (MaxOpenFilesPerDb == 0 || MaxOpenFilesPerDb < -1) MaxOpenFilesPerDb = 256;
         if (NegativeCacheEntries < 0) NegativeCacheEntries = 0;

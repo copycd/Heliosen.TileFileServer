@@ -22,7 +22,16 @@ internal static class LayerProbe
     /// 폴더가 RocksDB 인지 그냥 파일 폴더인지 판정하고, 함께 지문도 계산한다.
     /// 판정과 지문을 한 번에 하는 이유는 같은 디렉터리를 두 번 훑지 않기 위해서다.
     /// </summary>
-    public static bool TryClassify(string path, out LayerSourceKind kind, out LayerFingerprint fingerprint)
+    /// <param name="checkPartial">
+    /// "복사가 덜 끝난 DB" 검사를 할지. 이 검사는 폴더 안을 훑어야 해서,
+    /// 항목이 수천 개인 타일 레벨 폴더(z)에서는 비싸다.
+    /// 애초에 DB 가 될 수 없는 폴더(이름이 숫자뿐인 레벨 폴더)에는 false 를 넘긴다.
+    /// </param>
+    public static bool TryClassify(
+        string path,
+        out LayerSourceKind kind,
+        out LayerFingerprint fingerprint,
+        bool checkPartial = true)
     {
         kind = LayerSourceKind.FileSystem;
         fingerprint = LayerFingerprint.None;
@@ -58,7 +67,7 @@ internal static class LayerProbe
             // CURRENT 가 없는데 RocksDB 부속 파일이 보인다면, 복사가 아직 끝나지 않은 DB 다.
             // 이걸 일반 파일 폴더로 등록해버리면 완성될 때까지 엉뚱하게 404 만 내보내게 된다.
             // 아직 준비가 안 된 것으로 보고 건너뛰면, 복사가 끝난 뒤 재훑기에서 제대로 잡힌다.
-            if (LooksLikePartialRocksDb(path))
+            if (checkPartial && LooksLikePartialRocksDb(path))
                 return false;
 
             // RocksDB 가 아니면 일반 파일 폴더로 본다.
@@ -76,13 +85,25 @@ internal static class LayerProbe
         }
     }
 
-    /// <summary>CURRENT 는 없는데 RocksDB 흔적이 있는지. 복사/생성이 진행 중인 DB 를 걸러내기 위한 것.</summary>
+    /// <summary>
+    /// CURRENT 는 없는데 RocksDB 흔적이 있는지. 복사/생성이 진행 중인 DB 를 걸러내기 위한 것.
+    ///
+    /// 패턴마다 EnumerateFiles 를 부르면 폴더를 그만큼 여러 번 훑는다.
+    /// 하위 폴더가 수천 개인 곳에서는 그게 그대로 비용이 되므로 **한 번만 훑고** 이름을 직접 본다.
+    /// </summary>
     private static bool LooksLikePartialRocksDb(string path)
     {
-        foreach (var pattern in (string[])["MANIFEST-*", "*.sst", "OPTIONS-*", "LOCK"])
+        foreach (var file in Directory.EnumerateFiles(path))
         {
-            if (Directory.EnumerateFiles(path, pattern).Any())
+            var name = Path.GetFileName(file.AsSpan());
+
+            if (name.StartsWith("MANIFEST-", StringComparison.Ordinal)
+                || name.StartsWith("OPTIONS-", StringComparison.Ordinal)
+                || name.EndsWith(".sst", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("LOCK", StringComparison.Ordinal))
+            {
                 return true;
+            }
         }
 
         return false;

@@ -38,6 +38,9 @@ internal sealed class RocksDbTileLayer : ITileLayer
     public string Source => "RocksDB";
     public string Path { get; }
 
+    /// <summary>RocksDB 는 좌표를 10 바이트 키로 인코딩해야 하므로 타일 규칙이 필요하다.</summary>
+    public bool ServesByPath => false;
+
     /// <summary>DB 의 대표 포맷. 확장자 없는 요청과 확장자 대체에 쓴다.</summary>
     public TileLayerFormatKind PrimaryKind { get; }
 

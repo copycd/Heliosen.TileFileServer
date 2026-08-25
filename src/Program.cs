@@ -3,6 +3,20 @@ using Heliosen.TileFileServer.Configuration;
 using Heliosen.TileFileServer.Endpoints;
 using Heliosen.TileFileServer.Layers;
 
+// 로그를 UTF-8 로 내보낸다.
+//
+// 윈도우에서 stdout 을 파일로 받으면(NSSM, `> log.txt`) .NET 이 콘솔 코드페이지로 기록한다.
+// 한국어 윈도우면 CP949 가 되어서, UTF-8 을 전제하는 편집기·수집기에서 한글이 깨져 보인다.
+// 여기서 한 번 못박아 두면 윈도우/리눅스 로그가 같은 인코딩으로 남는다.
+try
+{
+    Console.OutputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+}
+catch (Exception)
+{
+    // 콘솔이 없는 환경(서비스로 실행 등)에서는 설정하지 못할 수 있다. 로그 인코딩뿐이라 그냥 넘어간다.
+}
+
 Console.WriteLine($"Heliosen TileFileServer {Define.Version}");
 
 var builder = WebApplication.CreateBuilder(args);

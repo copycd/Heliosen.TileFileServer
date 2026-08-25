@@ -106,32 +106,40 @@ public static class TileFormat
         bytes.Length >= 3 && bytes[0] == 0x1F && bytes[1] == 0x8B && bytes[2] == 0x08;
 
     /// <summary>
-    /// 문자열 키(경로)로 저장된 부가 파일의 MIME. layer.json, tilemapresource.xml, 3D Tiles 조각들.
+    /// 확장자 → MIME 표.
+    ///
+    /// 파일 폴더는 일반 웹 서버처럼 동작해야 하므로(css, js, woff2, mp4 ...)
+    /// 손으로 만든 표로는 부족하다. ASP.NET 의 정적 파일 MIME 표(약 380 종)를 그대로 쓰고,
+    /// 그 표에 없는 타일 전용 확장자만 얹는다.
+    /// css 를 octet-stream 으로 내보내면 브라우저가 스타일시트를 아예 적용하지 않는다.
     /// </summary>
-    public static string ContentTypeForPath(string path)
+    private static readonly Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider MimeProvider = CreateMimeProvider();
+
+    private static Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider CreateMimeProvider()
     {
-        ReadOnlySpan<char> ext = Path.GetExtension(path.AsSpan());
-        if (ext.Length > 0 && ext[0] == '.')
-            ext = ext[1..];
+        var provider = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
 
-        if (ext.Equals("json", StringComparison.OrdinalIgnoreCase)) return "application/json";
-        if (ext.Equals("xml", StringComparison.OrdinalIgnoreCase)) return "application/xml";
-        if (ext.Equals("jpg", StringComparison.OrdinalIgnoreCase)) return "image/jpeg";
-        if (ext.Equals("jpeg", StringComparison.OrdinalIgnoreCase)) return "image/jpeg";
-        if (ext.Equals("png", StringComparison.OrdinalIgnoreCase)) return "image/png";
-        if (ext.Equals("webp", StringComparison.OrdinalIgnoreCase)) return "image/webp";
-        if (ext.Equals("terrain", StringComparison.OrdinalIgnoreCase)) return "application/vnd.quantized-mesh";
-        if (ext.Equals("pbf", StringComparison.OrdinalIgnoreCase)) return "application/x-protobuf";
-        if (ext.Equals("mvt", StringComparison.OrdinalIgnoreCase)) return "application/x-protobuf";
-        if (ext.Equals("b3dm", StringComparison.OrdinalIgnoreCase)) return "application/octet-stream";
-        if (ext.Equals("i3dm", StringComparison.OrdinalIgnoreCase)) return "application/octet-stream";
-        if (ext.Equals("pnts", StringComparison.OrdinalIgnoreCase)) return "application/octet-stream";
-        if (ext.Equals("cmpt", StringComparison.OrdinalIgnoreCase)) return "application/octet-stream";
-        if (ext.Equals("glb", StringComparison.OrdinalIgnoreCase)) return "model/gltf-binary";
-        if (ext.Equals("gltf", StringComparison.OrdinalIgnoreCase)) return "model/gltf+json";
-        if (ext.Equals("txt", StringComparison.OrdinalIgnoreCase)) return "text/plain; charset=utf-8";
-        if (ext.Equals("html", StringComparison.OrdinalIgnoreCase)) return "text/html; charset=utf-8";
+        // 타일 쪽 확장자는 표준 표에 없다. 있는 것은 건드리지 않고 없는 것만 채운다.
+        provider.Mappings[".terrain"] = "application/vnd.quantized-mesh";
+        provider.Mappings[".pbf"] = "application/x-protobuf";
+        provider.Mappings[".mvt"] = "application/x-protobuf";
+        provider.Mappings[".b3dm"] = "application/octet-stream";
+        provider.Mappings[".i3dm"] = "application/octet-stream";
+        provider.Mappings[".pnts"] = "application/octet-stream";
+        provider.Mappings[".cmpt"] = "application/octet-stream";
+        provider.Mappings[".glb"] = "model/gltf-binary";
+        provider.Mappings[".gltf"] = "model/gltf+json";
+        provider.Mappings[".raw"] = "application/octet-stream";
 
-        return "application/octet-stream";
+        return provider;
     }
+
+    /// <summary>
+    /// 경로의 확장자로 MIME 을 정한다.
+    /// 부가 파일(layer.json, tilemapresource.xml)과 파일 폴더의 모든 파일이 이걸 쓴다.
+    /// </summary>
+    public static string ContentTypeForPath(string path) =>
+        MimeProvider.TryGetContentType(path, out var contentType)
+            ? contentType
+            : "application/octet-stream";
 }
