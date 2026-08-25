@@ -1,4 +1,4 @@
-# Windows x64 배포본을 만든다.
+﻿# Windows x64 배포본을 만든다.
 #   .\publish-win.ps1              프레임워크 의존 (대상 서버에 .NET 10 런타임 필요)
 #   .\publish-win.ps1 -SelfContained   자체 포함 (런타임 설치 불필요, 용량 큼)
 param(

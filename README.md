@@ -255,6 +255,14 @@ journalctl -u heliosen-tileserver -f
 .\publish-win.ps1
 ```
 
+> `publish-win.ps1` 은 **UTF-8 BOM 으로 저장해야 한다.**
+> Windows PowerShell 5.1 은 BOM 이 없으면 스크립트를 시스템 코드페이지(한국어 Windows = 949)로
+> 읽어서 한글 메시지가 `?꾨즺` 처럼 깨진다. PowerShell 7 은 BOM 없이도 UTF-8 로 읽는다.
+> 편집기에서 다시 저장할 때 BOM 이 빠지지 않게 주의할 것.
+>
+> 반대로 `publish-linux.sh` 에는 **BOM 을 넣으면 안 된다.**
+> `#!/usr/bin/env bash` 앞에 BOM 이 붙으면 shebang 을 인식하지 못해 실행 자체가 실패한다.
+
 프레임워크 의존이 기본이라 대상 서버에 .NET 10 런타임이 필요하다.
 런타임을 깔 수 없으면 `-SelfContained` 를 준다.
 
