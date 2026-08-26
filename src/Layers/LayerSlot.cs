@@ -17,7 +17,6 @@ internal sealed class LayerSlot
 {
     public string Name { get; }
     public string Path { get; }
-    public LayerSourceKind SourceKind { get; }
 
     /// <summary>이 칸을 만들 때의 폴더 지문. 재훑기에서 바뀌었으면 DB 가 교체된 것이다.</summary>
     public LayerFingerprint Fingerprint { get; }
@@ -40,7 +39,6 @@ internal sealed class LayerSlot
     public LayerSlot(
         string name,
         string path,
-        LayerSourceKind sourceKind,
         LayerFingerprint fingerprint,
         Func<LayerSlot, ITileLayer> open,
         int retrySeconds,
@@ -48,7 +46,6 @@ internal sealed class LayerSlot
     {
         Name = name;
         Path = path;
-        SourceKind = sourceKind;
         Fingerprint = fingerprint;
         _open = open;
         _retryMs = Math.Max(1, retrySeconds) * 1000;
@@ -215,7 +212,7 @@ internal sealed class LayerSlot
         return layer?.Describe(state, error) ?? new LayerDescription
         {
             Name = Name,
-            Source = SourceKind == LayerSourceKind.RocksDb ? "RocksDB" : "FileSystem",
+            Source = "RocksDB",
             Path = Path,
             State = state,
             Error = error,

@@ -68,6 +68,10 @@ if (options.EnableCors)
 // 레이어
 // ---------------------------------------------------------------------------
 builder.Services.AddSingleton<RocksDbEnvironment>();
+
+// 파일은 목록에 담지 않는다. 루트 하나짜리 정적 파일 서버가 요청 때 디스크에서 바로 찾는다.
+builder.Services.AddSingleton(sp => new RootFileServer(
+    options.ResolveRoot(sp.GetRequiredService<IHostEnvironment>().ContentRootPath)));
 builder.Services.AddSingleton<LayerCatalog>();
 builder.Services.AddHostedService<LayerCatalogWorker>();
 
@@ -83,7 +87,7 @@ var catalog = app.Services.GetRequiredService<LayerCatalog>();
 catalog.Start();
 
 log.LogInformation(
-    "타일 루트={Root} 레이어={Count}개 블록캐시={CacheMB}MB DB당최대열기={MaxOpen} 재훑기={Rescan}초",
+    "타일 루트={Root} RocksDB레이어={Count}개 블록캐시={CacheMB}MB DB당최대열기={MaxOpen} 재훑기={Rescan}초",
     catalog.Root,
     catalog.Count,
     options.BlockCacheMB,
@@ -101,6 +105,6 @@ AdminEndpoints.Map(app, options, Define.Version);
 // 타일 경로는 반드시 마지막에 등록한다. 포괄 경로(/{layer}/{**path})가
 // /healthz, /admin/* 같은 고정 경로를 삼키지 않게 하기 위해서다.
 // (라우팅 우선순위상 고정 경로가 이기지만, 등록 순서까지 맞춰두면 읽는 사람이 헷갈리지 않는다.)
-TileEndpoints.Map(app, options);
+TileEndpoints.Map(app, options, app.Services.GetRequiredService<RootFileServer>());
 
 app.Run();

@@ -119,11 +119,11 @@ internal static class AdminEndpoints
 
         if (names.Count == 0)
         {
-            body.Append("<p>서비스 중인 레이어가 없습니다. 루트 폴더 밑에 타일 DB 폴더를 넣으면 자동으로 인식합니다.</p>");
+            body.Append("<p>인식된 RocksDB 레이어가 없습니다. 루트 폴더 밑에 타일 DB 폴더를 넣으면 자동으로 인식합니다.</p>");
         }
         else
         {
-            body.Append("<h2>레이어 ").Append(names.Count).Append("개</h2><ul>");
+            body.Append("<h2>RocksDB 레이어 ").Append(names.Count).Append("개</h2><ul>");
 
             foreach (var name in names)
             {
@@ -133,6 +133,11 @@ internal static class AdminEndpoints
 
             body.Append("</ul>");
         }
+
+        // 파일은 목록에 담지 않는다. 왜 안 보이는지 여기서 알려준다.
+        body.Append("<h2>파일</h2><p>루트 밑의 파일은 <b>목록에 담지 않고</b> ");
+        body.Append("요청이 올 때 디스크에서 바로 찾습니다(일반 웹 서버처럼). ");
+        body.Append("URL 경로가 곧 파일 경로라서 미리 훑을 이유가 없고, 그만큼 재훑기도 가벼워집니다.</p>");
 
         return body.ToString();
     }

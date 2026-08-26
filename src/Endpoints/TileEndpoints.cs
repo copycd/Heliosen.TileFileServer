@@ -27,7 +27,7 @@ internal static class TileEndpoints
     /// </summary>
     private static readonly string[] SegmentKeys = ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"];
 
-    public static void Map(WebApplication app, TileServerOptions options)
+    public static void Map(WebApplication app, TileServerOptions options, RootFileServer files)
     {
         var maxDepth = Math.Clamp(options.MaxLayerDepth, 1, SegmentKeys.Length);
 
@@ -56,13 +56,13 @@ internal static class TileEndpoints
             app.MapMethods($"{prefix}/{{z:int}}/{{x:int}}/{{y:int}}.{{ext}}", getAndHead, (
                 int z, int x, int y, string ext,
                 LayerCatalog catalog, HttpContext context) =>
-                    ServeTile(catalog, cacheControl, context, ReadLayerName(context, captured), captured, z, x, y, ext));
+                    ServeTile(catalog, files, cacheControl, context, ReadLayerName(context, captured), captured, z, x, y, ext));
 
             // 확장자 없는 타일. DB 의 대표 포맷으로 내보낸다.
             app.MapMethods($"{prefix}/{{z:int}}/{{x:int}}/{{y:int}}", getAndHead, (
                 int z, int x, int y,
                 LayerCatalog catalog, HttpContext context) =>
-                    ServeTile(catalog, cacheControl, context, ReadLayerName(context, captured), captured, z, x, y, extension: null));
+                    ServeTile(catalog, files, cacheControl, context, ReadLayerName(context, captured), captured, z, x, y, extension: null));
         }
 
         // 나머지 전부. layer.json, tilemapresource.xml, tileset.json, 3D Tiles 조각 등.
@@ -70,7 +70,7 @@ internal static class TileEndpoints
         app.MapMethods("/{**path}", getAndHead, (
             string path,
             LayerCatalog catalog, HttpContext context) =>
-                ServeBlob(catalog, cacheControl, context, path));
+                ServeBlob(catalog, files, cacheControl, context, path));
     }
 
     /// <summary>"/{p1}", "/{p1}/{p2}", ... 형태의 경로 접두사를 만든다.</summary>
@@ -123,6 +123,7 @@ internal static class TileEndpoints
 
     private static IResult ServeTile(
         LayerCatalog catalog,
+        RootFileServer files,
         string? cacheControl,
         HttpContext context,
         string? layerName,
@@ -133,8 +134,9 @@ internal static class TileEndpoints
         if (string.IsNullOrEmpty(layerName))
             return NotFound;
 
+        // RocksDB 레이어가 아니면 파일로 찾는다. URL 을 그대로 파일 경로로 쓴다.
         if (!catalog.TryGetSlot(layerName, out var slot))
-            return NotFound;
+            return ServeFromDisk(files, cacheControl, context);
 
         // 여기서 얻은 권한은 finally 에서 반드시 놓아야 한다.
         // 놓지 않으면 그 레이어의 DB 핸들이 영원히 닫히지 않는다.
@@ -143,23 +145,10 @@ internal static class TileEndpoints
 
         try
         {
-            TilePayload? payload;
-
-            if (layer.ServesByPath)
-            {
-                // 파일 폴더는 **URL 을 그대로** 파일 경로로 쓴다.
-                // 라우트에서 파싱한 z/x/y 로 다시 조립하면 "07" 이 "7" 이 되어
-                // 실제로 있는 07/12/99.png 를 못 찾는다. 규칙을 두지 않는 게 요점이다.
-                var relative = RelativePathAfterLayer(context.Request.Path, layerDepth);
-                payload = relative is null ? null : layer.GetBlob(relative);
-            }
-            else
-            {
-                // 임의의 상한은 두지 않는다. 잘못 넣은 좌표는 키가 없으니 그냥 404 다.
-                // (키 포맷이 표현할 수 없는 값 - 음수, 레벨 255 초과 - 은 레이어에서 걸러 404 로 만든다.
-                //  거기서 안 걸면 (byte)z 가 감싸돌아서 '다른 타일'을 내보내게 된다.)
-                payload = LookupTile(layer, z, x, y, extension);
-            }
+            // 임의의 상한은 두지 않는다. 잘못 넣은 좌표는 키가 없으니 그냥 404 다.
+            // (키 포맷이 표현할 수 없는 값 - 음수, 레벨 255 초과 - 은 레이어에서 걸러 404 로 만든다.
+            //  거기서 안 걸면 (byte)z 가 감싸돌아서 '다른 타일'을 내보내게 된다.)
+            var payload = LookupTile(layer, z, x, y, extension);
 
             return payload is null ? NotFound : Write(context, cacheControl, payload);
         }
@@ -174,6 +163,20 @@ internal static class TileEndpoints
         {
             slot.Release();
         }
+    }
+
+    /// <summary>
+    /// RocksDB 레이어가 아닌 요청을 루트 밑 파일로 찾는다.
+    /// URL 경로를 그대로 쓴다(라우트 값으로 재조립하지 않는다).
+    /// </summary>
+    private static IResult ServeFromDisk(RootFileServer files, string? cacheControl, HttpContext context)
+    {
+        var relative = RelativePathAfterLayer(context.Request.Path, 0);
+        if (relative is null)
+            return NotFound;
+
+        var payload = files.TryGet(relative);
+        return payload is null ? NotFound : Write(context, cacheControl, payload);
     }
 
     /// <summary>
@@ -216,6 +219,7 @@ internal static class TileEndpoints
 
     private static IResult ServeBlob(
         LayerCatalog catalog,
+        RootFileServer files,
         string? cacheControl,
         HttpContext context,
         string path)
@@ -229,8 +233,9 @@ internal static class TileEndpoints
             return NotFound;
 
         // 레이어 이름이 몇 단인지 모르니 가장 긴 접두사부터 맞춰본다.
+        // 맞는 DB 가 없으면 파일로 찾는다.
         if (!catalog.TryResolveBlob(path, out var slot, out var relative))
-            return NotFound;
+            return ServeFromDisk(files, cacheControl, context);
 
         if (!slot.TryAcquire(out var layer, out var openError))
             return openError is null ? NotFound : ServiceUnavailable;
