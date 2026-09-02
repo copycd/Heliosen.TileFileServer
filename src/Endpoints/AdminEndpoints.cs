@@ -28,8 +28,37 @@ internal static class AdminEndpoints
         app.MapMethods("/version", getAndHead, () => Results.Text(version, "text/plain"));
 
         app.MapMethods("/", getAndHead, (LayerCatalog catalog) => Results.Content(
-            BuildIndexHtml(catalog, version),
+            BuildIndexHtml(catalog, options, version),
             "text/html; charset=utf-8"));
+
+        // 감시 도구가 긁어가기 좋게 같은 내용을 JSON 으로도 낸다.
+        app.MapMethods("/status", getAndHead, (LayerCatalog catalog) =>
+        {
+            var st = ServerStatus.Capture(catalog, options, version);
+
+            return Results.Json(new
+            {
+                version = st.Version,
+                startedAt = st.StartedAt,
+                uptimeSeconds = (long)st.Uptime.TotalSeconds,
+                uptime = st.UptimeText,
+                now = st.Now,
+                root = st.Root,
+                rootExists = st.RootExists,
+                layers = st.LayerCount,
+                lastScanAt = st.LastScanAt,
+                rescanSeconds = st.RescanSeconds,
+                watchFileSystem = st.WatchFileSystem,
+                blockCacheMB = st.BlockCacheMB,
+                blockCacheUsedMB = st.BlockCacheUsedMB,
+                managedMemoryMB = st.ManagedMemoryMB,
+                workingSetMB = st.WorkingSetMB,
+                runtime = st.Runtime,
+                os = st.OperatingSystem,
+                machine = st.MachineName,
+                processors = st.ProcessorCount,
+            });
+        });
 
         if (!options.EnableAdmin)
             return;
@@ -103,19 +132,59 @@ internal static class AdminEndpoints
         return IPAddress.IsLoopback(remote);
     }
 
-    private static string BuildIndexHtml(LayerCatalog catalog, string version)
+    private static string BuildIndexHtml(LayerCatalog catalog, TileServerOptions options, string version)
     {
         var names = catalog.LayerNames();
+        var st = ServerStatus.Capture(catalog, options, version);
 
         var body = new System.Text.StringBuilder();
         body.Append("<!doctype html><meta charset=\"utf-8\">");
         body.Append("<title>Heliosen TileFileServer</title>");
-        body.Append("<style>body{font:14px/1.6 system-ui,sans-serif;margin:2rem;max-width:60rem}");
+        body.Append("<style>body{font:14px/1.6 system-ui,sans-serif;margin:2rem;max-width:64rem}");
         body.Append("code{background:#f4f4f5;padding:.1rem .3rem;border-radius:3px}");
-        body.Append("li{margin:.2rem 0}</style>");
+        body.Append("li{margin:.2rem 0}");
+        body.Append("table.st{border-collapse:collapse;margin:.5rem 0}");
+        body.Append("table.st th{text-align:left;padding:.2rem 1.5rem .2rem 0;color:#555;font-weight:600;white-space:nowrap;vertical-align:top}");
+        body.Append("table.st td{padding:.2rem 0}");
+        body.Append(".warn{color:#b00}</style>");
         body.Append("<h1>Heliosen TileFileServer</h1>");
-        body.Append("<p>version ").Append(WebUtility.HtmlEncode(version));
-        body.Append(" &middot; root <code>").Append(WebUtility.HtmlEncode(catalog.Root)).Append("</code></p>");
+
+        body.Append("<h2>서버 상태</h2><table class=\"st\">");
+        Row(body, "가동 시간", WebUtility.HtmlEncode(st.UptimeText));
+        Row(body, "시작 시각", st.StartedAt.ToString("yyyy-MM-dd HH:mm:ss zzz"));
+        Row(body, "현재 시각", st.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"));
+        Row(body, "버전", WebUtility.HtmlEncode(st.Version));
+
+        var rootHtml = "<code>" + WebUtility.HtmlEncode(st.Root) + "</code>"
+            + (st.RootExists ? string.Empty : " <span class=\"warn\">(폴더 없음)</span>");
+        Row(body, "타일 루트", rootHtml);
+
+        Row(body, "RocksDB 레이어", st.LayerCount.ToString());
+
+        var scanText = st.LastScanAt is null
+            ? "아직 없음"
+            : st.LastScanAt.Value.ToString("HH:mm:ss");
+
+        if (st.RescanSeconds > 0)
+        {
+            scanText += $" &middot; {st.RescanSeconds}초마다";
+            if (st.NextScanIn is { } next)
+                scanText += $" (다음 {(int)next.TotalSeconds}초 뒤)";
+        }
+        else
+        {
+            scanText += " &middot; 주기 훑기 꺼짐 (POST /admin/reload 로 갱신)";
+        }
+
+        scanText += st.WatchFileSystem ? " &middot; 폴더 감시 켜짐" : " &middot; 폴더 감시 꺼짐";
+        Row(body, "목록 훑기", scanText);
+
+        Row(body, "블록 캐시", $"{st.BlockCacheUsedMB} / {st.BlockCacheMB} MB 사용");
+        Row(body, "메모리", $"관리 힙 {st.ManagedMemoryMB} MB &middot; 작업 집합 {st.WorkingSetMB} MB");
+        Row(body, "런타임", WebUtility.HtmlEncode(st.Runtime) + " &middot; " + WebUtility.HtmlEncode(st.OperatingSystem));
+        Row(body, "호스트", WebUtility.HtmlEncode(st.MachineName) + $" &middot; 코어 {st.ProcessorCount}");
+        body.Append("</table>");
+        body.Append("<p>같은 내용을 JSON 으로: <code>/status</code></p>");
 
         if (names.Count == 0)
         {
@@ -140,5 +209,10 @@ internal static class AdminEndpoints
         body.Append("URL 경로가 곧 파일 경로라서 미리 훑을 이유가 없고, 그만큼 재훑기도 가벼워집니다.</p>");
 
         return body.ToString();
+    }
+
+    private static void Row(System.Text.StringBuilder body, string label, string valueHtml)
+    {
+        body.Append("<tr><th>").Append(label).Append("</th><td>").Append(valueHtml).Append("</td></tr>");
     }
 }

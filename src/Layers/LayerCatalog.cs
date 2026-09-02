@@ -30,6 +30,12 @@ internal sealed class LayerCatalog : IDisposable
     private readonly List<PendingRetire> _pending = [];
 
     /// <summary>
+    /// 이번 훑기에서 새로 만든 칸들. 락을 놓은 뒤에 배경에서 미리 열어두려고 모아둔다.
+    /// _rescanGate 로 보호한다.
+    /// </summary>
+    private readonly List<LayerSlot> _pendingWarmup = [];
+
+    /// <summary>
     /// 잠시 등록을 막아둔 레이어 이름 -> 언제까지. _rescanGate 로 보호한다.
     ///
     /// 윈도우에서는 DB 를 열고 있는 동안 그 폴더를 지우거나 이름을 바꿀 수 없다(핸들이 잠근다).
@@ -51,6 +57,9 @@ internal sealed class LayerCatalog : IDisposable
 
     private long _rescanDueTicks;
     private long _lastRescanTicks;
+
+    /// <summary>마지막으로 목록을 훑은 시각. 상태 화면에 보여주려고 들고 있다.</summary>
+    private DateTimeOffset? _lastScanAt;
     private bool _rootMissingLogged;
 
     private bool _disposed;
@@ -60,6 +69,9 @@ internal sealed class LayerCatalog : IDisposable
     public int Count => Volatile.Read(ref _layers).Count;
 
     public RocksDbEnvironment Environment => _environment;
+
+    /// <summary>마지막으로 목록을 훑은 시각. 아직 안 훑었으면 null.</summary>
+    public DateTimeOffset? LastScanAt => _lastScanAt;
 
     public LayerCatalog(
         TileServerOptions options,
@@ -239,9 +251,12 @@ internal sealed class LayerCatalog : IDisposable
         if (_disposed)
             return;
 
+        LayerSlot[] fresh = [];
+
         lock (_rescanGate)
         {
             Volatile.Write(ref _lastRescanTicks, System.Environment.TickCount64);
+            _lastScanAt = DateTimeOffset.Now;
 
             // 루트를 못 읽는 상황에서도 떼어내기 만료는 처리해야 한다. 그래서 RescanCore 밖에 둔다.
             PurgeExpiredSuppressions();
@@ -263,6 +278,27 @@ internal sealed class LayerCatalog : IDisposable
             {
                 _log.LogError(ex, "내려간 레이어를 정리하는 중 오류.");
             }
+
+            if (_pendingWarmup.Count > 0)
+            {
+                fresh = _pendingWarmup.ToArray();
+                _pendingWarmup.Clear();
+            }
+        }
+
+        // **락을 놓은 뒤에** 연다.
+        //
+        // DB 를 여는 데는 MANIFEST 를 읽고 SST 를 여는 시간이 든다. DB 가 크면 수십~수백 ms 다.
+        // 이걸 첫 요청 스레드에서 하면 그 요청 하나가 그만큼 멈춘다.
+        // 여기서 미리 열어두면 그 비용이 배경 작업(1초 틱)으로 넘어가고, 요청은 항상 열린 핸들을 받는다.
+        //
+        // 락 안에서 열면 그동안 detach/attach/reload 가 전부 막히므로 반드시 밖에서 한다.
+        foreach (var slot in fresh)
+        {
+            if (slot.TryWarmup(out _))
+                continue;
+
+            // 실패는 이미 LayerSlot 이 로그로 남기고 백오프를 건다. 여기서는 넘어간다.
         }
     }
 
@@ -326,7 +362,9 @@ internal sealed class LayerCatalog : IDisposable
                 _log.LogInformation("레이어가 바뀌었습니다. 다시 엽니다. Layer={Layer}", name);
             }
 
-            next.Add(name, CreateSlot(name, directory, fingerprint));
+            var created = CreateSlot(name, directory, fingerprint);
+            next.Add(name, created);
+            _pendingWarmup.Add(created);
         }
 
         // 이번에 안 보인 칸들은 내려보낸다.
