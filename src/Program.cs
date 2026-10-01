@@ -69,6 +69,9 @@ if (options.EnableCors)
 // ---------------------------------------------------------------------------
 builder.Services.AddSingleton<RocksDbEnvironment>();
 
+// 응답할 때 gzip 으로 압축한 타일. 블록 캐시처럼 모든 레이어가 상한 하나를 함께 쓴다.
+builder.Services.AddSingleton<GzipTileCache>();
+
 // 파일은 목록에 담지 않는다. 루트 하나짜리 정적 파일 서버가 요청 때 디스크에서 바로 찾는다.
 builder.Services.AddSingleton(sp => new RootFileServer(
     options.ResolveRoot(sp.GetRequiredService<IHostEnvironment>().ContentRootPath)));
@@ -93,6 +96,14 @@ log.LogInformation(
     options.BlockCacheMB,
     options.MaxOpenFilesPerDb,
     options.RescanSeconds);
+
+log.LogInformation(
+    "gzip 응답: terrain={GzipTerrain} 레이어별지정={GzipLayers} 캐시={GzipCacheMB}MB",
+    options.GzipTerrain,
+    options.GzipLayers.Count == 0
+        ? "-"
+        : string.Join(", ", options.GzipLayers.Select(static p => $"{p.Key}={p.Value}")),
+    options.GzipCacheMB);
 
 // 리눅스에서 레이어가 많을 때 가장 먼저 터지는 것이 파일 디스크립터다. 미리 알려준다.
 ResourceLimits.WarnIfTight(log, options, catalog.Count);

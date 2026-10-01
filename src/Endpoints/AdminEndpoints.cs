@@ -51,6 +51,11 @@ internal static class AdminEndpoints
                 watchFileSystem = st.WatchFileSystem,
                 blockCacheMB = st.BlockCacheMB,
                 blockCacheUsedMB = st.BlockCacheUsedMB,
+                gzipCacheMB = st.GzipCacheMB,
+                gzipCacheUsedMB = st.GzipCacheUsedMB,
+                gzipCacheEntries = st.GzipCacheEntries,
+                gzipCacheHits = st.GzipCacheHits,
+                gzipCacheMisses = st.GzipCacheMisses,
                 managedMemoryMB = st.ManagedMemoryMB,
                 workingSetMB = st.WorkingSetMB,
                 runtime = st.Runtime,
@@ -75,6 +80,8 @@ internal static class AdminEndpoints
             count = catalog.Count,
             blockCacheMB = catalog.Environment.BlockCacheMB,
             blockCacheUsedMB = catalog.Environment.BlockCacheUsedBytes / (1024 * 1024),
+            gzipCacheMB = catalog.GzipCache.LimitMB,
+            gzipCacheUsedMB = (catalog.GzipCache.GetStatistics()?.CurrentEstimatedSize ?? 0) / (1024 * 1024),
             layers = catalog.Describe(),
         }));
 
@@ -134,7 +141,8 @@ internal static class AdminEndpoints
 
     private static string BuildIndexHtml(LayerCatalog catalog, TileServerOptions options, string version)
     {
-        var names = catalog.LayerNames();
+        // 이름만이 아니라 gzip 응답 여부까지 보여주려고 상태를 받는다. 이름순 정렬이다.
+        var layers = catalog.Describe();
         var st = ServerStatus.Capture(catalog, options, version);
 
         var body = new System.Text.StringBuilder();
@@ -180,24 +188,34 @@ internal static class AdminEndpoints
         Row(body, "목록 훑기", scanText);
 
         Row(body, "블록 캐시", $"{st.BlockCacheUsedMB} / {st.BlockCacheMB} MB 사용");
+        Row(body, "gzip 캐시", st.GzipCacheMB <= 0
+            ? "꺼짐 (매번 압축)"
+            : $"{st.GzipCacheUsedMB} / {st.GzipCacheMB} MB 사용 &middot; {st.GzipCacheEntries:N0}개 &middot; 적중 {st.GzipCacheHits:N0} / 미스 {st.GzipCacheMisses:N0}");
         Row(body, "메모리", $"관리 힙 {st.ManagedMemoryMB} MB &middot; 작업 집합 {st.WorkingSetMB} MB");
         Row(body, "런타임", WebUtility.HtmlEncode(st.Runtime) + " &middot; " + WebUtility.HtmlEncode(st.OperatingSystem));
         Row(body, "호스트", WebUtility.HtmlEncode(st.MachineName) + $" &middot; 코어 {st.ProcessorCount}");
         body.Append("</table>");
         body.Append("<p>같은 내용을 JSON 으로: <code>/status</code></p>");
 
-        if (names.Count == 0)
+        if (layers.Count == 0)
         {
             body.Append("<p>인식된 RocksDB 레이어가 없습니다. 루트 폴더 밑에 타일 DB 폴더를 넣으면 자동으로 인식합니다.</p>");
         }
         else
         {
-            body.Append("<h2>RocksDB 레이어 ").Append(names.Count).Append("개</h2><ul>");
+            body.Append("<h2>RocksDB 레이어 ").Append(layers.Count).Append("개</h2><ul>");
 
-            foreach (var name in names)
+            foreach (var layer in layers)
             {
-                var encoded = WebUtility.HtmlEncode(name);
-                body.Append("<li><code>/").Append(encoded).Append("/{z}/{x}/{y}.{ext}</code></li>");
+                var encoded = WebUtility.HtmlEncode(layer.Name);
+                body.Append("<li><code>/").Append(encoded).Append("/{z}/{x}/{y}.{ext}</code>");
+
+                // 응답할 때 gzip 으로 압축하는 레이어(GzipTerrain / GzipLayers).
+                // 아직 안 열린 레이어는 DB 에 어떤 포맷이 있는지 몰라서 표기하지 않는다.
+                if (layer.GzipFormats is { Length: > 0 })
+                    body.Append(", gzip");
+
+                body.Append("</li>");
             }
 
             body.Append("</ul>");

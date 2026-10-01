@@ -17,6 +17,7 @@ internal sealed class LayerCatalog : IDisposable
 
     private readonly TileServerOptions _options;
     private readonly RocksDbEnvironment _environment;
+    private readonly GzipTileCache _gzipCache;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<LayerCatalog> _log;
 
@@ -70,17 +71,21 @@ internal sealed class LayerCatalog : IDisposable
 
     public RocksDbEnvironment Environment => _environment;
 
+    public GzipTileCache GzipCache => _gzipCache;
+
     /// <summary>마지막으로 목록을 훑은 시각. 아직 안 훑었으면 null.</summary>
     public DateTimeOffset? LastScanAt => _lastScanAt;
 
     public LayerCatalog(
         TileServerOptions options,
         RocksDbEnvironment environment,
+        GzipTileCache gzipCache,
         IHostEnvironment hostEnvironment,
         ILoggerFactory loggerFactory)
     {
         _options = options;
         _environment = environment;
+        _gzipCache = gzipCache;
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<LayerCatalog>();
 
@@ -113,15 +118,6 @@ internal sealed class LayerCatalog : IDisposable
         return snapshot.Values
             .Select(static slot => slot.Describe())
             .OrderBy(static d => d.Name, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
-
-    public IReadOnlyList<string> LayerNames()
-    {
-        var snapshot = Volatile.Read(ref _layers);
-
-        return snapshot.Keys
-            .OrderBy(static n => n, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
 
@@ -545,6 +541,7 @@ internal sealed class LayerCatalog : IDisposable
                 slot.Name,
                 slot.Path,
                 _environment,
+                _gzipCache,
                 _options,
                 _loggerFactory.CreateLogger<RocksDbTileLayer>()),
             _options.OpenRetrySeconds,

@@ -24,6 +24,11 @@ internal sealed record ServerStatus(
     bool WatchFileSystem,
     int BlockCacheMB,
     long BlockCacheUsedMB,
+    int GzipCacheMB,
+    long GzipCacheUsedMB,
+    long GzipCacheEntries,
+    long GzipCacheHits,
+    long GzipCacheMisses,
     long ManagedMemoryMB,
     long WorkingSetMB,
     string Runtime,
@@ -38,6 +43,9 @@ internal sealed record ServerStatus(
     {
         var now = DateTimeOffset.Now;
 
+        // 캐시를 껐으면(GzipCacheMB = 0) 통계가 없다. 전부 0 으로 보여준다.
+        var gzip = catalog.GzipCache.GetStatistics();
+
         return new ServerStatus(
             Version: version,
             StartedAt: ProcessStartedAt,
@@ -51,6 +59,11 @@ internal sealed record ServerStatus(
             WatchFileSystem: options.WatchFileSystem,
             BlockCacheMB: catalog.Environment.BlockCacheMB,
             BlockCacheUsedMB: (long)(catalog.Environment.BlockCacheUsedBytes / (1024 * 1024)),
+            GzipCacheMB: catalog.GzipCache.LimitMB,
+            GzipCacheUsedMB: (gzip?.CurrentEstimatedSize ?? 0) / (1024 * 1024),
+            GzipCacheEntries: gzip?.CurrentEntryCount ?? 0,
+            GzipCacheHits: gzip?.TotalHits ?? 0,
+            GzipCacheMisses: gzip?.TotalMisses ?? 0,
             ManagedMemoryMB: GC.GetTotalMemory(forceFullCollection: false) / (1024 * 1024),
             WorkingSetMB: Environment.WorkingSet / (1024 * 1024),
             Runtime: System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,

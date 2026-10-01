@@ -77,6 +77,30 @@ public sealed class TileServerOptions
     public bool CacheImmutable { get; set; }
 
     /// <summary>
+    /// 압축 안 된 채로 저장된 terrain 타일을 응답할 때 gzip 으로 보낸다.
+    ///
+    /// quantized-mesh 는 gzip 하면 원본의 1/3~1/4 로 준다. 기존 DB 를 다시 만들지 않고 응답만 줄이려는 것이다.
+    /// Accept-Encoding 과 무관하게 항상 gzip 으로 보낸다(gzip 으로 저장된 DB 와 같은 동작. 브라우저는 알아서 푼다).
+    /// DB 에 이미 gzip 으로 저장된 타일은 다시 압축하지 않고 그대로 나간다.
+    /// 레이어를 <see cref="GzipLayers"/> 에 적었으면 그쪽이 우선이다.
+    /// </summary>
+    public bool GzipTerrain { get; set; } = true;
+
+    /// <summary>
+    /// 레이어별 gzip 응답 여부. 키는 URL 의 레이어 이름(korea/seoul 처럼), 값은 true/false.
+    ///   true  -> jpg/png 가 아닌 타일을 gzip 으로 응답
+    ///   false -> 압축하지 않음
+    /// 적지 않은 레이어는 <see cref="GzipTerrain"/> 을 따른다.
+    /// </summary>
+    public Dictionary<string, bool> GzipLayers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 응답할 때 압축한 타일을 들고 있을 메모리 상한(MB). 0 이면 캐시 없이 매번 압축한다.
+    /// 한 번 압축한 타일은 여기서 꺼내 쓰므로 DB 조회와 압축을 둘 다 건너뛴다.
+    /// </summary>
+    public int GzipCacheMB { get; set; } = 256;
+
+    /// <summary>
     /// 요청 확장자가 DB 에 없는 포맷이면 DB 의 실제 포맷으로 대신 찾아준다.
     /// (jpg 로 만든 DB 에 .png 로 요청이 와도 타일이 나간다. Content-Type 은 실제 바이트에 맞춰 보낸다.)
     /// 끄면 nginx 처럼 딱 맞지 않으면 404 다.
@@ -142,7 +166,16 @@ public sealed class TileServerOptions
         if (OpenRetrySeconds < 1) OpenRetrySeconds = 1;
         if (RescanSeconds < 0) RescanSeconds = 0;
         if (RetireGraceSeconds < 0) RetireGraceSeconds = 0;
+        if (GzipCacheMB < 0) GzipCacheMB = 0;
         IgnoreFolders ??= [];
         AllowedOrigins ??= [];
+
+        // 레이어 이름은 카탈로그와 같은 규칙(대소문자 무시, '/' 구분)으로 맞춘다.
+        // 바인더가 사전을 새로 만들면 비교자가 기본값(대소문자 구분)으로 돌아가므로 여기서 다시 만든다.
+        // "korea\seoul", "/korea/seoul/" 처럼 적어도 같은 레이어로 잡히게 한다.
+        var gzipLayers = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, enabled) in GzipLayers ?? new Dictionary<string, bool>())
+            gzipLayers[name.Replace('\\', '/').Trim('/')] = enabled;
+        GzipLayers = gzipLayers;
     }
 }

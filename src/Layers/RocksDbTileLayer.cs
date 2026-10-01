@@ -23,16 +23,28 @@ namespace Heliosen.TileFileServer.Layers;
 /// </summary>
 internal sealed class RocksDbTileLayer : ITileLayer
 {
+    private static long s_nextId;
+
     private readonly RocksDb _db;
     private readonly ReadOptions _readOptions;
     private readonly TileServerOptions _options;
     private readonly NegativeTileCache? _negative;
+    private readonly GzipTileCache _gzipCache;
+
+    /// <summary>
+    /// 인스턴스 번호. gzip 캐시의 키로 쓴다.
+    /// DB 를 다시 열면 번호가 바뀌므로 옛 DB 로 압축해둔 타일이 섞여 나가지 않는다.
+    /// </summary>
+    private readonly long _id = Interlocked.Increment(ref s_nextId);
 
     private readonly DateTimeOffset _lastModified;
     private readonly string _etagSeed;
 
     /// <summary>DB 에 들어있는 포맷들의 비트마스크. (1u &lt;&lt; (byte)kind)</summary>
     private readonly uint _kindMask;
+
+    /// <summary>응답할 때 gzip 으로 압축할 포맷들의 비트마스크. 열 때 한 번 정한다.</summary>
+    private readonly uint _gzipKindMask;
 
     public string Name { get; }
     public string Source => "RocksDB";
@@ -52,15 +64,18 @@ internal sealed class RocksDbTileLayer : ITileLayer
         string path,
         RocksDb db,
         RocksDbEnvironment env,
+        GzipTileCache gzipCache,
         TileServerOptions options)
     {
         Name = name;
         Path = path;
         _db = db;
         _options = options;
+        _gzipCache = gzipCache;
         _readOptions = env.CreateReadOptions();
 
         _kindMask = ProbeKinds(db, env, out var primary);
+        _gzipKindMask = ResolveGzipKinds(name, options);
         PrimaryKind = primary;
         ContentsType = ReadContentsType(db);
 
@@ -81,6 +96,7 @@ internal sealed class RocksDbTileLayer : ITileLayer
         string name,
         string path,
         RocksDbEnvironment env,
+        GzipTileCache gzipCache,
         TileServerOptions options,
         ILogger log)
     {
@@ -91,13 +107,14 @@ internal sealed class RocksDbTileLayer : ITileLayer
 
         try
         {
-            var layer = new RocksDbTileLayer(name, path, db, env, options);
+            var layer = new RocksDbTileLayer(name, path, db, env, gzipCache, options);
 
             log.LogInformation(
-                "RocksDB 레이어를 열었습니다(조회 전용). Layer={Layer} Format={Format} Formats={Formats} ContentsType={ContentsType} Path={Path}",
+                "RocksDB 레이어를 열었습니다(조회 전용). Layer={Layer} Format={Format} Formats={Formats} Gzip={Gzip} ContentsType={ContentsType} Path={Path}",
                 name,
                 layer.PrimaryKind,
                 string.Join(",", layer.AvailableKinds()),
+                string.Join(",", layer.GzipKinds()) is { Length: > 0 } gzip ? gzip : "-",
                 layer.ContentsType ?? "-",
                 path);
 
@@ -158,6 +175,12 @@ internal sealed class RocksDbTileLayer : ITileLayer
         if (_negative is not null && _negative.Contains(kind, level, col, row))
             return null;
 
+        var gzip = (_gzipKindMask & (1u << (byte)kind)) != 0;
+
+        // 한 번 압축해서 내보낸 타일이면 DB 조회와 압축을 둘 다 건너뛴다.
+        if (gzip && _gzipCache.TryGet(_id, kind, level, col, row, out var cached))
+            return GzippedPayload(kind, level, col, row, cached);
+
         // 키 인코딩은 DB 를 만든 쪽과 반드시 같아야 하므로 DTB.RocksTileStore 것을 그대로 쓴다.
         // 10 바이트 배열이 요청마다 하나 생기지만(스택에 직접 쓰던 예전 방식과의 차이),
         // 포맷 정의가 한 곳에만 있는 값이 그보다 크다. 실측으로도 처리량 차이가 없었다.
@@ -171,15 +194,38 @@ internal sealed class RocksDbTileLayer : ITileLayer
             return null;
         }
 
+        var encoding = DetectEncoding(kind, bytes);
+
+        // 압축 안 된 채로 저장된 타일만 여기서 압축한다.
+        // 이미 gzip 으로 저장된 타일을 또 압축하면 브라우저가 한 겹만 풀어서 Cesium 이 깨진다.
+        if (gzip && encoding is null)
+        {
+            var compressed = TileFormat.Gzip(bytes);
+            _gzipCache.Set(_id, kind, level, col, row, compressed);
+            return GzippedPayload(kind, level, col, row, compressed);
+        }
+
         return new TilePayload
         {
             Bytes = bytes,
             ContentType = TileFormat.ContentTypeOf(kind),
-            ContentEncoding = DetectEncoding(kind, bytes),
+            ContentEncoding = encoding,
             ETag = MakeETag(kind, level, col, row, bytes.Length),
             LastModified = _lastModified,
         };
     }
+
+    private TilePayload GzippedPayload(TileLayerFormatKind kind, byte level, uint col, uint row, byte[] compressed) => new()
+    {
+        Bytes = compressed,
+        ContentType = TileFormat.ContentTypeOf(kind),
+        ContentEncoding = "gzip",
+
+        // 저장된 원본과는 다른 표현(content-coding)이라 ETag 도 달라야 한다.
+        // 설정을 바꿔 압축을 껐다 켰을 때, 클라이언트가 들고 있던 다른 표현으로 304 를 받지 않게 한다.
+        ETag = MakeETag(kind, level, col, row, compressed.Length, gzipped: true),
+        LastModified = _lastModified,
+    };
 
     public TilePayload? GetBlob(string relativePath)
     {
@@ -326,13 +372,13 @@ internal sealed class RocksDbTileLayer : ITileLayer
     /// 조회 전용 핸들은 열린 시점의 스냅샷을 보므로, 이 값들이 같으면 내용도 같다.
     /// 응답마다 수십 KB 를 해시하지 않아도 되니 CPU 가 훨씬 덜 든다.
     /// </summary>
-    private EntityTagHeaderValue MakeETag(TileLayerFormatKind kind, byte level, uint col, uint row, int length)
+    private EntityTagHeaderValue MakeETag(TileLayerFormatKind kind, byte level, uint col, uint row, int length, bool gzipped = false)
     {
         var tag = string.Concat(
             "\"", _etagSeed, "-",
             ((byte)kind).ToString("x2"), level.ToString("x2"), "-",
             col.ToString("x"), ".", row.ToString("x"), "-",
-            length.ToString("x"), "\"");
+            length.ToString("x"), gzipped ? "-gz\"" : "\"");
 
         return new EntityTagHeaderValue(tag);
     }
@@ -356,6 +402,43 @@ internal sealed class RocksDbTileLayer : ITileLayer
         }
     }
 
+    /// <summary>이 DB 에 있는 포맷 중 응답할 때 gzip 으로 압축하는 것들.</summary>
+    private IEnumerable<string> GzipKinds()
+    {
+        foreach (var kind in TileFormat.KnownKinds)
+        {
+            if ((_kindMask & _gzipKindMask & (1u << (byte)kind)) != 0)
+                yield return TileFormat.ExtensionOf(kind);
+        }
+    }
+
+    /// <summary>
+    /// 이 레이어에서 응답할 때 gzip 으로 압축할 포맷들을 정한다.
+    /// 레이어를 열 때 한 번만 하므로 조회 경로에서는 비트 검사 한 번이다.
+    /// </summary>
+    private static uint ResolveGzipKinds(string name, TileServerOptions options)
+    {
+        var hasOverride = options.GzipLayers.TryGetValue(name, out var layerSetting);
+        uint mask = 0;
+
+        foreach (var kind in TileFormat.KnownKinds)
+        {
+            // jpg/png 는 이미 압축된 포맷이다. gzip 해봐야 거의 안 줄고 CPU 만 쓴다.
+            if (!TileFormat.MayBeGzipped(kind))
+                continue;
+
+            // 레이어를 콕 집어 정했으면 그대로, 아니면 terrain 만 GzipTerrain 을 따른다.
+            var enabled = hasOverride
+                ? layerSetting
+                : options.GzipTerrain && kind == TileLayerFormatKind.terrain;
+
+            if (enabled)
+                mask |= 1u << (byte)kind;
+        }
+
+        return mask;
+    }
+
     public LayerDescription Describe(string state, string? error) => new()
     {
         Name = Name,
@@ -364,6 +447,7 @@ internal sealed class RocksDbTileLayer : ITileLayer
         State = state,
         Format = PrimaryKind == TileLayerFormatKind.Unknown ? null : TileFormat.ExtensionOf(PrimaryKind),
         Formats = AvailableKinds().ToArray(),
+        GzipFormats = GzipKinds().ToArray(),
         ContentsType = ContentsType,
         Error = error,
         NegativeCacheCount = _negative?.Count,

@@ -222,6 +222,7 @@ MANIFEST 를 읽고 SST 를 여는 데 DB 가 크면 수십~수백 ms 가 든다
 RocksDB 레이어  4
 목록 훑기       09:56:57 · 60초마다 (다음 56초 뒤) · 폴더 감시 켜짐
 블록 캐시       0 / 512 MB 사용
+gzip 캐시       0 / 256 MB 사용 · 2개 · 적중 7 / 미스 3
 메모리          관리 힙 7 MB · 작업 집합 93 MB
 런타임          .NET 10.0.11 · Microsoft Windows 10.0.26200
 호스트          COPYCD-HELDESK · 코어 28
@@ -231,6 +232,9 @@ RocksDB 레이어  4
 "총 요청 수" 같은 것을 넣으려면 공유 카운터를 매 요청 올려야 하는데,
 초당 수십만 요청 구간에서는 그 카운터가 코어 사이에서 캐시 라인을 튕겨 실제로 처리량을 깎는다.
 상태 화면 하나 때문에 낼 비용이 아니라서 뺐다. 필요하면 넣을 수 있다.
+
+gzip 캐시의 적중/미스 수는 예외다. `MemoryCache` 가 스레드마다 따로(`ThreadLocal`) 세기 때문에
+코어 사이에서 캐시 라인을 튕기지 않는다. 미스에는 DB 에 이미 gzip 으로 저장돼서 캐시에 넣지 않는 타일의 조회도 들어간다.
 
 > `/` 와 `/status` 는 인증이 없다. 타일 루트의 절대경로와 메모리·가동시간이 보인다.
 > 사내망이면 문제없지만 외부에 열려 있다면 앞단에서 막거나 `/admin` 처럼 토큰을 걸어야 한다.
@@ -314,9 +318,35 @@ DB 를 갈아끼우면 지문이 바뀌어 ETag 도 바뀐다 → 클라이언�
 저장된 바이트가 gzip 이면 `Accept-Encoding` 과 무관하게 gzip 으로 보낸다
 (압축 안 된 원본이 없으므로. nginx `gzip_static always` 와 같은 동작이다).
 
-### 압축은 하지 않는다
+### 압축 안 된 terrain 은 응답할 때 gzip 한다
 
-타일은 이미 압축된 포맷이다. 응답 압축을 켜면 CPU 만 쓰고 얻는 게 없다.
+DB 를 다시 만들지 않고 응답만 줄이려는 것이다. quantized-mesh 는 gzip 하면 많이 준다.
+
+| 표본 지형 DB | 원본 대비 | 압축 시간(타일당) |
+|---|---|---|
+| 타일 2179장, 평균 3.3 KB | 30.8% | 45 µs |
+| 그중 8 KB 이상 380장, 평균 15 KB | 28.4% | 166 µs |
+
+- 기본으로 **terrain 만** 켜져 있다(`GzipTerrain`). 레이어별로 `GzipLayers` 에서 켜고 끈다.
+- 위 gzip 저장 DB 와 똑같이 **`Accept-Encoding` 과 무관하게 항상 gzip** 으로 보낸다.
+- DB 에 이미 gzip 으로 저장된 타일은 다시 압축하지 않는다(두 번 압축하면 Cesium 이 깨진다).
+- jpg/png 는 이미 압축된 포맷이라 설정과 무관하게 압축하지 않는다.
+- 한 번 압축한 타일은 **gzip 캐시**(`GzipCacheMB`, 모든 레이어 공유)에서 꺼내 쓴다. DB 조회와 압축을 둘 다 건너뛴다.
+  캐시 키가 레이어 이름이 아니라 레이어 인스턴스라서, DB 를 갈아끼우면(핸들을 다시 열면) 옛 DB 로 압축한 타일은 다시 나가지 않는다.
+- ETag 는 원본과 구분된다(끝에 `-gz`). 설정을 바꿔 압축을 껐다 켜도 다른 표현으로 304 가 나가지 않는다.
+
+```jsonc
+"GzipTerrain": true,
+"GzipLayers": { "bbb": false, "korea/busan": true },   // 키는 URL 의 레이어 이름
+"GzipCacheMB": 256
+```
+
+실측(Windows 11, Release, .NET HttpClient 동시성 64, 로컬 루프백, 같은 terrain 타일을 5초씩 두 번):
+원본 231,304 / 169,698 RPS, gzip 캐시 적중 223,330 / 224,593 RPS.
+측정 오차 범위 안에서 같고, 응답 크기는 7,686 B → 2,242 B.
+
+첫 화면 레이어 목록에서 이 설정이 켜진 레이어는 끝에 `, gzip` 이 붙는다.
+`/admin/layers` 에는 레이어마다 `gzipFormats` 로 나온다.
 
 ### 요청 로그
 
@@ -341,6 +371,9 @@ nginx 의 `access_log off` 에 해당한다. 요청 단위 추적이 필요하�
 | `NegativeCacheEntries` | `100000` | "없는 타일" 기억 개수. `0` 이면 끔 |
 | `CacheMaxAgeSeconds` | `3600` | `Cache-Control: max-age` |
 | `CacheImmutable` | `false` | `immutable` 추가 |
+| `GzipTerrain` | `true` | 압축 안 된 terrain 을 gzip 으로 응답 |
+| `GzipLayers` | `{}` | 레이어별 gzip 응답 `true`/`false`. 적지 않은 레이어는 `GzipTerrain` 을 따름 |
+| `GzipCacheMB` | `256` | 응답할 때 압축한 타일 캐시(모든 레이어 공유). `0` 이면 매번 압축 |
 | `ExtensionFallback` | `true` | 확장자가 DB 포맷과 달라도 내보냄 |
 | `VerifyChecksums` | `true` | RocksDB 체크섬 검증 |
 | `OpenRetrySeconds` | `30` | 열기 실패 후 재시도 간격 |
@@ -377,7 +410,7 @@ Kestrel__Endpoints__Http__Url=http://0.0.0.0:7080
 이 서버는 LRU 캐시 하나를 만들어 모든 DB 에 물려주므로, 레이어 수와 무관하게
 캐시 메모리 총량이 `BlockCacheMB` 에서 고정된다. 인덱스/필터 블록도 같은 캐시에 넣어 함께 상한을 받게 했다.
 
-대략적인 메모리: `BlockCacheMB` + 레이어당 수 MB + .NET 런타임.
+대략적인 메모리: `BlockCacheMB` + `GzipCacheMB` + 레이어당 수 MB + .NET 런타임.
 
 ### 파일 디스크립터 (Linux)
 
@@ -664,6 +697,7 @@ src/
 │   ├── LayerCatalog.cs            탐색, 핫 리로드, 은퇴
 │   ├── LayerProbe.cs              폴더 판정 + 지문
 │   ├── RocksDbEnvironment.cs      공유 블록 캐시 / DB 옵션
+│   ├── GzipTileCache.cs           응답할 때 압축한 타일 캐시
 │   └── NegativeTileCache.cs       없는 타일 캐시
 └── Endpoints/
     ├── TileEndpoints.cs           타일 경로
