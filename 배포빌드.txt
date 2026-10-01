@@ -1,5 +1,5 @@
 [윈도우용]
-publish.ps1
+.\publish.ps1
 
 
 [리눅스용]
